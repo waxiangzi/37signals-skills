@@ -2,7 +2,9 @@
 
 Some skills in this repository are copied from other projects. Each section
 names the skills, the upstream, and reproduces the upstream license text
-unchanged, as its terms require.
+unchanged, as its terms require. The copied skills carry one small edit,
+listed under "Divergences" in `CLAUDE.md`: the `description` of each `hwc-*`
+skill is shortened. Skill bodies and `references/` are as upstream.
 
 ## `ruby`, `hwc-*` (superpowers-ruby)
 

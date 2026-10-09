@@ -22,7 +22,11 @@ There is no application code, build system, or tests.
 
 ## Vendored skills
 
-Do not hand-edit `ruby` or `hwc-*`: they are copies. To change one, change it upstream or note the divergence here. Skills that reference each other do so by sibling path (`../<name>/SKILL.md`), so keep skill folders flat under `skills/`.
+Do not hand-edit `ruby` or `hwc-*`: they are copies. To change one, change it upstream or note the divergence here.
+
+Divergences from upstream (re-apply after re-syncing):
+
+- Each `hwc-*` `description` ends before the sentence "Use hwc-X for ..., hwc-Y for ...". That sentence listed the five sibling skills, and the same list is already in each body under `## Escalate to Neighbor Skills`. A description is loaded into every conversation while the body loads only on use, so the copy in the description cost about 535 tokens per turn across the six skills for no extra routing. Bodies are untouched. Skills that reference each other do so by sibling path (`../<name>/SKILL.md`), so keep skill folders flat under `skills/`.
 
 ## Content Guidelines
 
