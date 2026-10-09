@@ -29,8 +29,11 @@ TOOLS = "Read,Grep,Glob,Skill,Bash,Write,Edit"
 # 技能正文要求先跑探针；工作目录是一次性夹具副本，Bash 只放行只读与一次性求值的命令
 _READONLY = ["ruby -e:*", "python3 -c:*", "node -e:*", "grep:*", "ls:*", "find:*",
              "cat:*", "head:*", "tail:*", "wc:*", "git status:*", "git diff:*", "git log:*"]
-# 用户级 hook 会把命令改写成 `rtk <原命令>`；mirror 一遍，否则改写后就匹配不上白名单
-BASH_ALLOW = [f"Bash({p})" for p in _READONLY + [f"rtk {p}" for p in _READONLY]]
+# 用户级 hook 会把命令改写成 `rtk <子命令>`（cat/head -> rtk read、ls -> rtk ls ...），
+# 改写后原命令的白名单就失配，只能整体放行 rtk；夹具是一次性 /tmp 副本，风险可接受。
+BASH_ALLOW = [f"Bash({p})" for p in _READONLY] + ["Bash(rtk:*)", "Bash(echo:*)", "Skill"]
+# 本机 claude 会因未知 frontmatter 键整个丢弃技能（`paths` 即是）；注入副本时剥掉
+SKILL_FM_DROP = ("paths",)
 RETRIES = 2
 ARTIFACT_CAP = 20_000
 ANSWER_CAP = 60_000
@@ -115,7 +118,7 @@ def collect_artifacts(workdir):
         if not p.is_file():
             continue
         rel = p.relative_to(workdir)
-        if rel.parts[0] in (".git", "node_modules", "tmp", "log"):
+        if rel.parts[0] in (".git", ".claude", "node_modules", "tmp", "log"):
             continue
         try:
             cur = p.read_bytes()
@@ -154,10 +157,42 @@ def score_case(case, answer, parsed, known):
     }
 
 
+def stage_skills(workdir):
+    """把仓库技能作为项目技能注进夹具副本的 .claude/skills/。
+
+    裸技能目录（`--add-dir REPO/skills`）在当前 claude 版本不会注册技能，只有
+    `<cwd>/.claude/skills/<name>/SKILL.md` 才会进 init 的技能清单；frontmatter 里
+    本机不认的键会连技能一起丢掉，所以要就地重写 SKILL.md。
+    """
+    dest = workdir / ".claude" / "skills"
+    staged = []
+    for skill in sorted((REPO / "skills").glob("*/SKILL.md")):
+        out = dest / skill.parent.name
+        shutil.copytree(skill.parent, out, dirs_exist_ok=True)
+        text = (out / "SKILL.md").read_text(encoding="utf-8")
+        m = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.S)
+        if not m:
+            staged.append(skill.parent.name)
+            continue
+        drop = re.compile(r"^(%s):" % "|".join(SKILL_FM_DROP))
+        keep, skipping = [], False
+        for line in m.group(1).splitlines():
+            if re.match(r"^\S", line):
+                skipping = bool(drop.match(line))
+            if not skipping:
+                keep.append(line)
+        (out / "SKILL.md").write_text("---\n" + "\n".join(keep) + "\n---\n" + text[m.end():],
+                                      encoding="utf-8")
+        staged.append(skill.parent.name)
+    return staged
+
+
 def run_one(case, arm, args, known, meta):
     workdir = Path(tempfile.mkdtemp(prefix=f"skilleval-{case['id']}-"))
     try:
         shutil.copytree(FIXTURE, workdir, dirs_exist_ok=True)
+        if arm != "noskills":
+            stage_skills(workdir)
         cmd = [
             "claude", "-p", case["prompt"],
             "--output-format", "stream-json", "--verbose",
@@ -294,7 +329,9 @@ def main():
         results = list(pool.map(lambda j: run_one(j[0], j[1], args, known, meta), jobs))
 
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip()
-    text = f"# 技能评估 {datetime.now():%Y-%m-%d %H:%M}（模型 {model}，fork HEAD {head}，runs={args.runs}）" + report(results, arms)
+    text = (f"# 技能评估 {datetime.now():%Y-%m-%d %H:%M}（模型 {model}，fork HEAD {head}，"
+            f"runs={args.runs}，技能以 .claude/skills 注入夹具、剥掉 {','.join(SKILL_FM_DROP)}）"
+            + report(results, arms))
     RESULTS.mkdir(exist_ok=True)
     (RESULTS / f"{args.stamp}.json").write_text(json.dumps({"head": head, "model": model, "results": results}, ensure_ascii=False, indent=2))
     (RESULTS / f"{args.stamp}.md").write_text(text)
