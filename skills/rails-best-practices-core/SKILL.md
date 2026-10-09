@@ -9,19 +9,19 @@ Use this as the default baseline for Rails work. Distilled from 37signals codeba
 
 ## Read the Specialist Skill When the Task Matches
 
-The skills below are marked `disable-model-invocation: true` (they cost no context until needed), so the Skill tool cannot load them. **Read the file directly.** Resolve the install directory once (`~/.claude/skills/`, `~/.agents/skills/`, or the project's `.claude/skills/`); the path is `<dir>/<name>/SKILL.md`.
+These are `disable-model-invocation: true`, so the Skill tool cannot load them. **Read** the sibling file `../<name>/SKILL.md` (relative to this skill's directory).
 
 | Task touches | Read |
 |---|---|
-| Writing or reviewing tests, flaky/slow suites | `rails-testing` |
+| Tests, flaky or slow suites | `rails-testing` |
 | Schema, indexes, constraints, backfills | `rails-migrations` |
 | Background jobs, retries, recurring tasks | `rails-jobs` |
 | Auth, authorization, tenant boundaries, SSRF, rate limits | `rails-security-multitenancy` |
 | Turbo, Stimulus, ActionCable, broadcasts | `rails-hotwire-realtime` |
 | Webhook endpoints, outbound delivery | `rails-webhooks` |
-| A DHH-style review of a diff | `dhh` |
+| DHH-style review of a diff | `dhh` |
 
-Read it before you start, not after: each is a complete defaults checklist and recalling one from memory drops items. Pointers inside this tree (`see rails-jobs`) mean the same thing.
+Read it first: each is a complete defaults checklist, and a recalled one drops items. A `see rails-jobs` inside any of them means the same.
 
 ## Core Defaults
 
@@ -85,7 +85,9 @@ scope :open, -> { where.missing(:closure) }
 
 Before adding a gem ask: can vanilla Rails do this? Is 50-150 lines in-repo simpler than a dependency? Those two questions are the rule.
 
-Not used in Campfire/Fizzy (an observation about those codebases, not a ban): Devise, Pundit, ViewComponent, RSpec, FactoryBot, Redis (Solid Queue/Cache/Cable use the DB), service objects, form objects, decorators, GraphQL, SPA frameworks, Tailwind. Run the two questions against your own constraints before copying the list. Items with a vanilla Rails equivalent (Pundit → model predicates, Redis → Solid *, FactoryBot → fixtures) are easy skips. Tailwind has no built-in counterpart: its alternative is hand-written CSS, a team-capacity tradeoff (see `guide/css.md`). A repo that already records a decision on it (an ADR) keeps that decision.
+The list below is what Campfire/Fizzy happen not to use: an observation about two codebases. Devise, Pundit, ViewComponent, RSpec, FactoryBot, Redis (Solid Queue/Cache/Cable use the DB), service objects, form objects, decorators, GraphQL, SPA frameworks, Tailwind.
+
+Most have a vanilla Rails counterpart (Pundit → model predicates, Redis → Solid *, FactoryBot → fixtures). Tailwind has none: its alternative is hand-written CSS, a team-capacity tradeoff. A repo that recorded its own decision (an ADR) keeps it.
 
 ## Review Priorities
 
