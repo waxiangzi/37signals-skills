@@ -1,0 +1,413 @@
+[
+  {
+    "id": "helper-naming",
+    "prompt": "我想在 app/helpers 下新建 post_format.rb，放几个文本格式化方法。命名上要注意什么？只回答，不要写文件。",
+    "expect_any": [
+      "rails-conventions",
+      "rails-best-practices-core"
+    ],
+    "checks": [
+      {
+        "name": "提到 _helper 后缀 / Zeitwerk 常量名",
+        "any": [
+          "_helper\\.rb",
+          "PostFormatHelper",
+          "post_format_helper"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "helper-view-collision",
+    "prompt": "我打算在 PostsHelper 里加一个叫 form_id 的方法。Rails 默认把所有 helper 都 include 进每个视图，这样做有什么风险？",
+    "expect_any": [
+      "rails-conventions",
+      "rails-best-practices-core"
+    ],
+    "checks": [
+      {
+        "name": "指出同名方法冲突/覆盖",
+        "any": [
+          "冲突",
+          "覆盖",
+          "同名",
+          "collid",
+          "shadow",
+          "override"
+        ]
+      },
+      {
+        "name": "提到全局 include 的机制",
+        "any": [
+          "include_all_helpers",
+          "所有 helper",
+          "全部 helper",
+          "所有视图",
+          "every view",
+          "all helpers",
+          "共享命名空间",
+          "每个视图",
+          "所有 .{0,20}helper",
+          "一个命名空间",
+          "shared namespace"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "verification-gates",
+    "prompt": "我改完代码后只跑了 bin/rails test，全绿。这样能算验证完成吗？这个项目还应该跑哪些？",
+    "expect_any": [
+      "rails-conventions",
+      "rails-testing"
+    ],
+    "checks": [
+      {
+        "name": "bin/rails test 不含系统测试",
+        "any": [
+          "test:system",
+          "系统测试",
+          "system test"
+        ]
+      },
+      {
+        "name": "提到 zeitwerk:check",
+        "any": [
+          "zeitwerk:check"
+        ]
+      },
+      {
+        "name": "提到 rubocop",
+        "any": [
+          "rubocop"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "assignment-writes-early",
+    "prompt": "看 app/models/post.rb 的 tag_names=：它里面直接 self.tags = ...。用户提交表单、标题校验失败时，已有文章的标签会怎样？怎么改？",
+    "expect_any": [
+      "rails-conventions",
+      "rails-best-practices-core"
+    ],
+    "checks": [
+      {
+        "name": "识别出赋值即写库（先于校验）",
+        "any": [
+          "立即",
+          "马上",
+          "直接写",
+          "已经写",
+          "immediately",
+          "persist",
+          "校验之前",
+          "校验前",
+          "before validation"
+        ]
+      },
+      {
+        "name": "给出 after_save / 记录意图 的修法",
+        "any": [
+          "after_save",
+          "after_commit",
+          "意图",
+          "pending",
+          "@tag_names",
+          "instance variable",
+          "实例变量"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "jobs-idempotent",
+    "prompt": "CommentNotificationJob 在 update! 之前如果抛错，重试时会重复发邮件。怎么把它改成幂等的？",
+    "expect_any": [
+      "rails-jobs"
+    ],
+    "checks": [
+      {
+        "name": "给出幂等思路",
+        "any": [
+          "幂等",
+          "idempot",
+          "notified_at",
+          "已通知",
+          "去重"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "migration-not-null",
+    "prompt": "我要给 posts 表加一个 NOT NULL 的 slug 列，表里有几百万行，在线迁移怎么写才安全？",
+    "expect_any": [
+      "rails-migrations"
+    ],
+    "checks": [
+      {
+        "name": "分步：先可空再回填再加约束",
+        "any": [
+          "回填",
+          "backfill",
+          "分三步",
+          "分步",
+          "先加.*可空",
+          "nullable",
+          "null: true"
+        ]
+      },
+      {
+        "name": "提到加约束/索引不锁表的手段",
+        "any": [
+          "validate",
+          "CONCURRENTLY",
+          "concurrently",
+          "disable_ddl_transaction",
+          "check constraint",
+          "CHECK 约束",
+          "NOT VALID",
+          "batch",
+          "分批"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "webhook-receive",
+    "prompt": "我要接收 Stripe 的 webhook：怎么验证签名，并保证同一个事件被重复投递时不会重复处理？",
+    "expect_any": [
+      "rails-webhooks"
+    ],
+    "checks": [
+      {
+        "name": "验签",
+        "any": [
+          "签名",
+          "signature",
+          "construct_event",
+          "HMAC"
+        ]
+      },
+      {
+        "name": "按事件 id 去重",
+        "any": [
+          "event.id",
+          "事件 id",
+          "事件ID",
+          "event id",
+          "idempot",
+          "幂等",
+          "唯一索引",
+          "unique"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "multitenancy-scope",
+    "prompt": "我想给 Post 加多租户：每个 account 只能看到自己的文章。怎么设计才不会在某个查询里漏掉租户条件？",
+    "expect_any": [
+      "rails-security-multitenancy"
+    ],
+    "checks": [
+      {
+        "name": "用关联/当前租户作用域而不是处处手写 where",
+        "any": [
+          "Current\\.account",
+          "account\\.posts",
+          "has_many :posts",
+          "through the association",
+          "通过关联",
+          "从 account 出发",
+          "default_scope",
+          "acts_as_tenant"
+        ]
+      },
+      {
+        "name": "提到数据库层或测试兜底",
+        "any": [
+          "外键",
+          "foreign key",
+          "测试",
+          "test",
+          "约束",
+          "composite",
+          "复合"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "turbo-stream-broadcast",
+    "prompt": "评论创建后，要把新评论实时推给其他正在看这篇文章的人。用 Turbo Streams 怎么做？",
+    "expect_any": [
+      "rails-hotwire-realtime",
+      "hwc-realtime-streaming"
+    ],
+    "checks": [
+      {
+        "name": "turbo_stream_from 订阅",
+        "any": [
+          "turbo_stream_from"
+        ]
+      },
+      {
+        "name": "模型/控制器广播",
+        "any": [
+          "broadcast",
+          "Turbo::StreamsChannel",
+          "broadcasts_to"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "stimulus-clipboard",
+    "prompt": "写一个 Stimulus controller：点击按钮把一段文本复制到剪贴板，按钮上短暂显示“已复制”，并确保不会泄漏定时器。",
+    "expect_any": [
+      "hwc-stimulus-fundamentals",
+      "hwc-ux-feedback"
+    ],
+    "checks": [
+      {
+        "name": "disconnect 里清理定时器",
+        "any": [
+          "disconnect"
+        ]
+      },
+      {
+        "name": "使用 targets / values / data-action",
+        "any": [
+          "static targets",
+          "static values",
+          "data-action",
+          "data-controller"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "controller-tests",
+    "prompt": "给 PostsController#create 补测试。哪些该测，哪些不用测？",
+    "expect_any": [
+      "rails-testing"
+    ],
+    "checks": [
+      {
+        "name": "集成测试走完整请求",
+        "any": [
+          "IntegrationTest",
+          "integration",
+          "集成测试",
+          "post posts_url",
+          "post posts_path"
+        ]
+      },
+      {
+        "name": "覆盖失败路径 / 状态码",
+        "any": [
+          "unprocessable",
+          "422",
+          "校验失败",
+          "失败路径",
+          "invalid"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "ruby-idiom",
+    "prompt": "把这个 Ruby 方法改得更地道：\ndef active_posts\n  r = []\n  Post.all.each { |p| r << p if p.published_at != nil }\n  r\nend",
+    "expect_any": [
+      "ruby",
+      "dhh"
+    ],
+    "checks": [
+      {
+        "name": "下推到数据库（where.not / scope），而不是 Ruby 里过滤",
+        "any": [
+          "where\\.not",
+          "scope :"
+        ],
+        "avoid": []
+      }
+    ]
+  },
+  {
+    "id": "dhh-review",
+    "prompt": "用 DHH 的风格评审一下 PostsController 的设计，指出该怎么改。",
+    "expect_any": [
+      "dhh",
+      "rails-best-practices-core"
+    ],
+    "checks": [
+      {
+        "name": "给出 Rails 风格的具体建议",
+        "any": [
+          "concern",
+          "胖模型",
+          "rich model",
+          "资源",
+          "resource",
+          "REST",
+          "模型",
+          "params\\.expect",
+          "\\.expect\\(",
+          "permit",
+          "CRUD",
+          "脚手架",
+          "scaffold",
+          "service object"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "neg-python-gil",
+    "prompt": "用一句话解释 Python 的 GIL 是什么。",
+    "forbid": "ALL",
+    "checks": [
+      {
+        "name": "回答提到解释器锁",
+        "any": [
+          "GIL",
+          "全局解释器锁",
+          "Global Interpreter Lock"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "neg-ts-convert",
+    "prompt": "把这段 JavaScript 改成 TypeScript：function add(a, b) { return a + b }",
+    "forbid": "ALL",
+    "checks": [
+      {
+        "name": "给出带类型注解的版本",
+        "any": [
+          "number"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "neg-sql-index",
+    "prompt": "PostgreSQL 里什么时候该用 GIN 索引而不是 B-tree？一段话说清楚。",
+    "forbid": "ALL",
+    "checks": [
+      {
+        "name": "提到 GIN 的适用场景",
+        "any": [
+          "jsonb",
+          "数组",
+          "全文",
+          "array",
+          "tsvector",
+          "倒排"
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,12 @@
+source "https://rubygems.org"
+
+gem "rails", "~> 8.0"
+gem "sqlite3"
+gem "puma"
+gem "turbo-rails"
+gem "stimulus-rails"
+gem "solid_queue"
+
+group :development, :test do
+  gem "rubocop-rails-omakase", require: false
+end

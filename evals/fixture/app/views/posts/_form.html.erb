@@ -1,0 +1,12 @@
+<%= form_with model: post do |form| %>
+  <%= form.label :title %>
+  <%= form.text_field :title %>
+
+  <%= form.label :tag_names, "标签" %>
+  <%= form.text_field :tag_names %>
+
+  <%= form.label :body %>
+  <%= form.text_area :body %>
+
+  <%= form.submit %>
+<% end %>
