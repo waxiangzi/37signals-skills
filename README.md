@@ -21,6 +21,16 @@ Drop the skills into Claude Code or Cursor and your agent starts applying the sa
 
 "On demand" skills are marked `disable-model-invocation: true` so they don't bloat every request — invoke them explicitly (e.g. as a slash command) or let the core skill point to them.
 
+### Added in this fork
+
+| Skill | What it covers | Invocation | Origin |
+|---|---|---|---|
+| [`rails-conventions`](skills/rails-conventions/SKILL.md) | Wiring the framework enforces by silence (Zeitwerk, helper inclusion, view-context collisions), the four pre-commit gates incl. `test:system`, two-sided verification for hand-written guards, and how a generic implement/tdd/review workflow connects to the skills above | Automatic (scoped by `paths`) | Original to this fork |
+| [`ruby`](skills/ruby/SKILL.md) | Plain-Ruby style: method ordering, error handling, OOD, modern Ruby, performance | Automatic | [superpowers-ruby](https://github.com/lucianghinda/superpowers-ruby) |
+| [`hwc-forms-validation`](skills/hwc-forms-validation/SKILL.md), [`hwc-navigation-content`](skills/hwc-navigation-content/SKILL.md), [`hwc-realtime-streaming`](skills/hwc-realtime-streaming/SKILL.md), [`hwc-media-content`](skills/hwc-media-content/SKILL.md), [`hwc-ux-feedback`](skills/hwc-ux-feedback/SKILL.md), [`hwc-stimulus-fundamentals`](skills/hwc-stimulus-fundamentals/SKILL.md) | Hotwire problem-specific guides (forms, navigation, streams, media, loading states, Stimulus basics), each with a `references/` set of worked articles | Automatic | superpowers-ruby, which took them from [Hotwire Club](https://github.com/TheHotwireClub/hotwire_club-skills) |
+
+The six `hwc-*` skills and `ruby` are not 37signals material; they are vendored here so one clone gives a complete Rails set. Licenses and the Hotwire Club terms note are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
 ## Installation
 
 ### Claude Code
@@ -138,4 +148,4 @@ This is an unofficial project created by analyzing publicly available code and d
 
 ## License
 
-Code examples extracted from Fizzy are licensed under the [O'Saasy License](https://osaasy.dev). All analysis, commentary, skills, and original content in this repo is licensed under MIT.
+Code examples extracted from Fizzy are licensed under the [O'Saasy License](https://osaasy.dev). All analysis, commentary, skills, and original content in this repo is licensed under MIT, except the vendored `ruby` and `hwc-*` skills, which keep their upstream licenses: see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

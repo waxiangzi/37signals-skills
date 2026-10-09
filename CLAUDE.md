@@ -9,13 +9,20 @@ This repository packages 37signals' Rails patterns in two forms:
 - `skills/` - Installable agent skills (one folder per skill, each containing a `SKILL.md` with YAML frontmatter). These are the primary deliverable.
 - `guide/` - Long-form markdown reference extracted from analyzing 37signals' Fizzy and Campfire codebases and their pull requests.
 
+This fork also carries skills that are not 37signals material (see the "Added in this fork" table in `README.md`): `rails-conventions` (original), and `ruby` plus six `hwc-*` skills vendored from superpowers-ruby. Their licenses live in `THIRD_PARTY_NOTICES.md`.
+
 There is no application code, build system, or tests.
 
 ## Structure
 
 - `README.md` - Main entry point: skill catalog, installation instructions, guide table of contents
-- `skills/<name>/SKILL.md` - Agent skills; frontmatter has `name`, `description`, and optionally `disable-model-invocation`
+- `skills/<name>/SKILL.md` - Agent skills; frontmatter has `name`, `description`, and optionally `disable-model-invocation`. Some skills also carry sibling files (`references/`, `BACKEND-SKILLS.md`, a template); `SKILL.md` points to them.
 - `guide/*.md` - Topic reference files (e.g. `guide/controllers.md`, `guide/models.md`)
+- `THIRD_PARTY_NOTICES.md` - Upstream license texts for vendored skills
+
+## Vendored skills
+
+Do not hand-edit `ruby` or `hwc-*`: they are copies. To change one, change it upstream or note the divergence here. Skills that reference each other do so by sibling path (`../<name>/SKILL.md`), so keep skill folders flat under `skills/`.
 
 ## Content Guidelines
 
