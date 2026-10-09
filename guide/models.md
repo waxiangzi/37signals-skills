@@ -263,6 +263,34 @@ end
 
 **Pattern:** Callbacks for setup/cleanup, not business logic.
 
+### Assignment Records Intent; `save` Performs It
+
+On a persisted record, assigning an association writes immediately, before validation runs:
+
+```ruby
+post.tags = [tag]      # INSERT INTO post_tags ... happens here, not at save
+post.tag_ids = [1, 2]  # same
+```
+
+A custom writer built on that (a comma-separated "tags" text field that does `find_or_create_by!` and assigns) inherits the problem. When the subsequent `save` fails validation, the form re-renders with a 422, and the database already holds the new tags. The user was told "nothing saved".
+
+Keep the writer inert and let the save lifecycle do the work:
+
+```ruby
+after_save   :apply_pending_tag_names
+after_commit :clear_pending_tag_names
+
+def tag_names
+  @pending_tag_names || tags.order(:name).pluck(:name).join(", ")  # echo input on 422
+end
+
+def tag_names=(value)
+  @pending_tag_names = value.to_s   # nil = "not assigned"; "" = "clear all"
+end
+```
+
+Clear the pending value in `after_commit`, not `after_save`. If the save runs inside an outer transaction that later rolls back (a two-step save-then-publish, for example), `after_commit` never fires, so the user's input survives for the re-render.
+
 ---
 
 ## PORO Patterns (Plain Old Ruby Objects)

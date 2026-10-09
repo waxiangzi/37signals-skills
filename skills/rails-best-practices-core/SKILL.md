@@ -7,6 +7,22 @@ description: Apply core Ruby on Rails best practices for architecture, naming, s
 
 Use this as the default baseline for Rails work. Distilled from 37signals codebases (Campfire, Fizzy) and DHH's review patterns.
 
+## Read the Specialist Skill When the Task Matches
+
+The skills below are marked `disable-model-invocation: true` (they cost no context until needed), so the Skill tool cannot load them. **Read the file directly.** Resolve the install directory once (`~/.claude/skills/`, `~/.agents/skills/`, or the project's `.claude/skills/`); the path is `<dir>/<name>/SKILL.md`.
+
+| Task touches | Read |
+|---|---|
+| Writing or reviewing tests, flaky/slow suites | `rails-testing` |
+| Schema, indexes, constraints, backfills | `rails-migrations` |
+| Background jobs, retries, recurring tasks | `rails-jobs` |
+| Auth, authorization, tenant boundaries, SSRF, rate limits | `rails-security-multitenancy` |
+| Turbo, Stimulus, ActionCable, broadcasts | `rails-hotwire-realtime` |
+| Webhook endpoints, outbound delivery | `rails-webhooks` |
+| A DHH-style review of a diff | `dhh` |
+
+Read it before you start, not after: each is a complete defaults checklist and recalling one from memory drops items. Pointers inside this tree (`see rails-jobs`) mean the same thing.
+
 ## Core Defaults
 
 - Prefer clear, explicit code over clever abstractions. Abstractions must earn their keep; if you can't point to 3+ variations that need it, inline it.
@@ -37,6 +53,7 @@ scope :open, -> { where.missing(:closure) }
 - **Default values via lambdas:** `belongs_to :creator, class_name: "User", default: -> { Current.user }`; `belongs_to :account, default: -> { board.account }`.
 - **Current attributes for request context** (`Current.user`, `Current.account`), with cascading setters (assigning `session` resolves `identity`, which resolves `user` for the account).
 - **Callbacks for setup/cleanup, not business logic.** Keep callback counts low.
+- **Assignment records intent; `save` performs it.** On a persisted record, `self.tags = [...]` and `tag_ids = [...]` write the join rows immediately, before validation. A custom writer that touches an association (or calls `create!`) therefore leaves a half-saved state when the following `save` fails. Stash the value in the writer, apply it in `after_save`, and clear it in `after_commit` (a rolled-back outer transaction must keep it so a 422 re-render can echo the input).
 - **Rails shortcuts to reach for:** `normalizes` (data cleanup before validation), `store_accessor` (JSON columns), `delegated_type` (heterogeneous collections), `generates_token_for` (expiring signed tokens), string enums via `enum :status, %w[drafted published].index_by(&:itself)`, `after_save_commit`, `touch: true` chains for cache invalidation, `delegate`.
 - **Association extensions for bulk domain operations:** define `grant_to`/`revise` on the `has_many` proxy; use `insert_all` for bulk creates and `dependent: :delete_all` on join tables with no callbacks.
 - **Human-friendly URLs:** override `to_param` with a per-tenant `number` rather than exposing raw IDs/UUIDs.
@@ -66,7 +83,9 @@ scope :open, -> { where.missing(:closure) }
 
 ## Dependencies
 
-Before adding a gem ask: can vanilla Rails do this? Is 50-150 lines in-repo simpler than a dependency? Commonly skipped: Devise, Pundit, ViewComponent, RSpec, FactoryBot, Redis (Solid Queue/Cache/Cable use the DB), service objects, form objects, decorators, GraphQL, SPA frameworks, Tailwind.
+Before adding a gem ask: can vanilla Rails do this? Is 50-150 lines in-repo simpler than a dependency? Those two questions are the rule.
+
+Not used in Campfire/Fizzy (an observation about those codebases, not a ban): Devise, Pundit, ViewComponent, RSpec, FactoryBot, Redis (Solid Queue/Cache/Cable use the DB), service objects, form objects, decorators, GraphQL, SPA frameworks, Tailwind. Run the two questions against your own constraints before copying the list. Items with a vanilla Rails equivalent (Pundit → model predicates, Redis → Solid *, FactoryBot → fixtures) are easy skips. Tailwind has no built-in counterpart: its alternative is hand-written CSS, a team-capacity tradeoff (see `guide/css.md`). A repo that already records a decision on it (an ADR) keeps that decision.
 
 ## Review Priorities
 

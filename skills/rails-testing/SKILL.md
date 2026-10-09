@@ -23,6 +23,10 @@ Use for test-writing and test-review tasks. Patterns from Campfire and Fizzy tes
 - **None:** view tests, JS/Stimulus unit tests, exhaustive channel tests. UI behavior is covered indirectly by system tests.
 - Don't duplicate the same behavior assertion at multiple layers.
 
+**The budget is also the default seam list.** A seam is the public boundary a test observes without reaching inside. In Rails these are fixed by convention, so a test-first workflow need not re-negotiate them per test: model public methods and scopes (domain invariants), controller/integration requests (status, redirect, format, auth), and one system smoke path per critical flow. Ask only when a test would sit somewhere else (a private method, a view, a job's `perform`), since that is where the budget says not to spend.
+
+**Run the right command for the layer.** `bin/rails test` runs everything *except* system tests (the task is described as "Run all tests in test folder except system ones"); system tests need `bin/rails test:system`. Changing a view, Turbo frame/stream, or Stimulus controller means running both. A passing `bin/rails test` says nothing about them.
+
 ## Fixtures
 
 - Express relationships by label, not ID; use ERB for relative timestamps (`created_at: <%= 1.hour.ago %>`) and shared computed values (one bcrypt digest reused).

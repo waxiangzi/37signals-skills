@@ -183,6 +183,8 @@ end
 
 System tests exercise real browser behavior against the app, which catches interaction and JavaScript regressions that unit/integration tests can miss.
 
+**They are not part of `bin/rails test`.** That task is described as "Run all tests in test folder except system ones"; run `bin/rails test:system` separately. A green `bin/rails test` after changing a view, a Turbo frame, or a Stimulus controller proves nothing about the layer that change lives in.
+
 **Source:** [Testing Rails Applications (System Testing)](https://guides.rubyonrails.org/testing.html)
 
 ## Test Helpers
