@@ -1,0 +1,14 @@
+<h1><%= page_title("文章") %></h1>
+
+<%= link_to "新建", new_post_path %>
+
+<ul>
+  <% @posts.each do |post| %>
+    <li>
+      <%= link_to post.title, post %>
+      <% if post.published_at %>
+        <time datetime="<%= post.published_at.iso8601 %>"><%= post.published_at.to_date %></time>
+      <% end %>
+    </li>
+  <% end %>
+</ul>

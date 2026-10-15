@@ -1,3 +1,5 @@
+require "net/http"
+
 class CommentNotificationJob < ApplicationJob
   retry_on Net::ReadTimeout, wait: 10.seconds, attempts: 5
 

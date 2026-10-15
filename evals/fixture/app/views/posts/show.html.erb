@@ -1,0 +1,7 @@
+<h1><%= page_title(@post.title) %></h1>
+
+<p><%= @post.tag_names %></p>
+<p><%= @post.body %></p>
+
+<%= link_to "编辑", edit_post_path(@post) %>
+<%= link_to "返回", posts_path %>
