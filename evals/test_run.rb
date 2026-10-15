@@ -275,6 +275,16 @@ class ScoreTest < Minitest::Test
     assert_equal 1.0, agg["composite"]
   end
 
+  def test_aggregate_content_ignores_negative_cases
+    # 反例的内容断言谁都能答对，混进内容通过率会系统抬高技能增益
+    pos = def_result("a", "default", true, 0.5)
+    neg = def_result("n", "default", true, 1.0).merge(
+      "score" => { "trigger_kind" => "negative", "trigger" => true, "fired" => [],
+                   "checks" => [], "content" => 1.0 }
+    )
+    assert_equal 0.5, aggregate([pos, neg])["content"]
+  end
+
   def test_aggregate_empty
     agg = aggregate([])
     assert_equal 0, agg["n"]

@@ -326,14 +326,17 @@ def aggregate(results)
   default = ok.select { |r| r["arm"] == "default" }
   pos = default.select { |r| r["score"]["trigger_kind"] == "positive" }
   neg = default.select { |r| r["score"]["trigger_kind"] == "negative" }
+  # 内容轴只看正例：反例的内容断言（“GIL 是什么”）谁都能答对，混进来会系统抬高通过率
+  content = ok.select { |r| r["score"]["trigger_kind"] == "positive" }.map { |r| r["score"]["content"] }
   fired_count = Hash.new(0)
   ok.each { |r| r["score"]["fired"].each { |s| fired_count[s] += 1 } }
 
   { "n" => ok.size, "errors" => results.size - ok.size,
     "trigger_recall" => mean(pos.map { |r| r["score"]["trigger"] ? 1 : 0 }),
     "false_trigger_rate" => mean(neg.map { |r| r["score"]["trigger"] ? 0 : 1 }),
-    "content" => mean(ok.map { |r| r["score"]["content"] }),
-    "composite" => mean(default.map { |r| 0.5 * (r["score"]["trigger"] ? 1 : 0) + 0.5 * r["score"]["content"] }),
+    "content" => mean(content),
+    "composite" => mean(default.select { |r| r["score"]["trigger_kind"] == "positive" }
+                          .map { |r| 0.5 * (r["score"]["trigger"] ? 1 : 0) + 0.5 * r["score"]["content"] }),
     "cost" => results.sum { |r| r["cost"].to_f },
     "fired_count" => fired_count.sort_by { |k, v| [-v, k] }.to_h }
 end
@@ -357,7 +360,7 @@ def report(results, arms)
       lines << "- 误触发率（反例，越低越好）：#{pct(agg['false_trigger_rate'])}"
       lines << "- 各技能被触发次数：#{agg['fired_count'].inspect}"
     end
-    lines << "- 内容通过率：#{pct(agg['content'])}"
+    lines << "- 内容通过率（正例）：#{pct(agg['content'])}"
     lines << "- 综合分（触发 50% + 内容 50%）：#{pct(agg['composite'])}" if arm == "default"
     trunc = rs.select { |r| r["truncated"] }.map { |r| r["case"] }
     lines << "- ⚠ 被 max-turns/预算截断（内容分不可信）：#{trunc.inspect}" unless trunc.empty?
@@ -384,7 +387,7 @@ def report(results, arms)
     b = aggregate(results.select { |r| r["arm"] == "noskills" })["content"]
     lines << ""
     lines << "## 技能增益"
-    lines << "内容通过率 default #{pct(d)} − noskills #{pct(b)} = #{format('%+.0f%%', (d.to_f - b.to_f) * 100)}"
+    lines << "内容通过率（正例）default #{pct(d)} − noskills #{pct(b)} = #{format('%+.0f%%', (d.to_f - b.to_f) * 100)}"
   end
   lines.join("\n")
 end
@@ -392,8 +395,8 @@ end
 # ---------------------------------------------------------------- 入口
 
 def parse_args(argv)
-  args = { arms: "default", only: "", runs: 1, jobs: 3, max_turns: 30, budget: 1.5,
-           timeout: 420, model: "", bucket: "" }
+  args = { arms: "default", only: "", runs: 1, jobs: 3, max_turns: 40, budget: 2.0,
+           timeout: 600, model: "", bucket: "" }
   OptionParser.new do |ap|
     ap.on("--arms ARMS", "逗号分隔，如 default,noskills") { |v| args[:arms] = v }
     ap.on("--only IDS", "只跑这些用例（逗号分隔）") { |v| args[:only] = v }
