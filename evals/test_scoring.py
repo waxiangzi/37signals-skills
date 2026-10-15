@@ -22,8 +22,19 @@ def assistant(*blocks):
     return {"type": "assistant", "message": {"content": list(blocks)}}
 
 
-def skill_call(name):
-    return {"type": "tool_use", "name": "Skill", "input": {"skill": name}}
+def skill_call(name, tid="t1"):
+    return {"type": "tool_use", "id": tid, "name": "Skill", "input": {"skill": name}}
+
+
+def read_file(path, tid="t1"):
+    return {"type": "tool_use", "id": tid, "name": "Read", "input": {"file_path": path}}
+
+
+def tool_result(tid="t1", is_error=False):
+    block = {"type": "tool_result", "tool_use_id": tid, "content": "..."}
+    if is_error:
+        block["is_error"] = True
+    return {"type": "user", "message": {"content": [block]}}
 
 
 def text(t):
@@ -103,16 +114,33 @@ class RunFailedTest(unittest.TestCase):
 
 class ParseTest(unittest.TestCase):
     def test_skill_call_and_namespacing(self):
-        p = run.parse_stream(stream(assistant(skill_call("plugin:rails-jobs"), text("ok"))))
+        p = run.parse_stream(stream(assistant(skill_call("plugin:rails-jobs"), text("ok")),
+                                    tool_result()))
         self.assertEqual(p["fired"], ["rails-jobs"])
 
     def test_skill_md_read_counts(self):
-        read = {"type": "tool_use", "name": "Read", "input": {"file_path": "/x/skills/rails-testing/SKILL.md"}}
-        self.assertEqual(run.parse_stream(stream(assistant(read)))["fired"], ["rails-testing"])
+        read = read_file("/x/skills/rails-testing/SKILL.md")
+        self.assertEqual(run.parse_stream(stream(assistant(read), tool_result()))["fired"],
+                         ["rails-testing"])
 
     def test_ordinary_read_does_not_count(self):
-        read = {"type": "tool_use", "name": "Read", "input": {"file_path": "/x/app/models/post.rb"}}
-        self.assertEqual(run.parse_stream(stream(assistant(read)))["fired"], [])
+        read = read_file("/x/app/models/post.rb")
+        self.assertEqual(run.parse_stream(stream(assistant(read), tool_result()))["fired"], [])
+
+    def test_failed_skill_call_does_not_count(self):
+        # 负控：被拒的 Skill 调用（disable-model-invocation / 权限）拿不到正文，不能算加载
+        p = run.parse_stream(stream(assistant(skill_call("rails-jobs")), tool_result(is_error=True)))
+        self.assertEqual(p["fired"], [])
+
+    def test_failed_read_does_not_count(self):
+        read = read_file("/x/skills/rails-testing/SKILL.md")
+        p = run.parse_stream(stream(assistant(read), tool_result(is_error=True)))
+        self.assertEqual(p["fired"], [])
+
+    def test_call_without_result_does_not_count(self):
+        # 负控：事件流被截断时看不到结果，宁可漏计也不能白送
+        p = run.parse_stream(stream(assistant(skill_call("rails-jobs"))))
+        self.assertEqual(p["fired"], [])
 
     def test_garbage_lines_ignored(self):
         self.assertEqual(run.parse_stream(["not json", "{bad"])["fired"], [])

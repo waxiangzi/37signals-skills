@@ -10,6 +10,7 @@
 import argparse
 import gzip
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -34,6 +35,32 @@ _READONLY = ["ruby -e:*", "python3 -c:*", "node -e:*", "grep:*", "ls:*", "find:*
 BASH_ALLOW = [f"Bash({p})" for p in _READONLY] + ["Bash(rtk:*)", "Bash(echo:*)", "Skill"]
 # 本机 claude 会因未知 frontmatter 键整个丢弃技能（`paths` 即是）；注入副本时剥掉
 SKILL_FM_DROP = ("paths",)
+
+
+def make_cc_config():
+    """空配置目录：不带个人技能/插件/用户级 hook（rtk 会改写 Bash 命令并压缩输出）。
+
+    只把 ~/.claude/settings.json 的 env 段（网关地址/令牌）带过去。
+    """
+    cfg = Path(tempfile.mkdtemp(prefix="skilleval-cc-"))
+    src = Path.home() / ".claude" / "settings.json"
+    env = {}
+    if src.exists():
+        try:
+            env = json.loads(src.read_text(encoding="utf-8")).get("env") or {}
+        except json.JSONDecodeError:
+            env = {}
+    (cfg / "settings.json").write_text(json.dumps({"env": env}, ensure_ascii=False, indent=2),
+                                       encoding="utf-8")
+    return cfg
+
+
+def claude_version():
+    try:
+        out = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=120)
+        return (out.stdout or "").strip().splitlines()[0] if out.stdout.strip() else "?"
+    except (OSError, subprocess.SubprocessError):
+        return "?"
 RETRIES = 2
 ARTIFACT_CAP = 20_000
 ANSWER_CAP = 60_000
@@ -73,8 +100,12 @@ def run_failed(parsed):
 
 
 def parse_stream(lines):
-    """从 stream-json 事件里提取：触发的技能、回答文本、成本、轮数、被拒的工具。"""
-    fired, texts, denied, cost, turns, result_text, ended = [], [], [], 0.0, 0, None, None
+    """从 stream-json 事件里提取：**加载成功**的技能、回答文本、成本、轮数、被拒的工具。
+
+    失败的调用不算加载：被权限拒的 Skill 调用、报错的 Read 都拿不到技能正文，
+    计成 fired 会白送一分（历史上 mac 轮没放行 Skill，系统性高估就在这里）。
+    """
+    pending, loaded, texts, denied, cost, turns, result_text, ended = {}, [], [], [], 0.0, 0, None, None
     for line in lines:
         line = line.strip()
         if not line.startswith("{"):
@@ -90,12 +121,21 @@ def parse_stream(lines):
                     texts.append(block["text"])
                 elif block.get("type") == "tool_use":
                     inp = block.get("input", {})
+                    name = None
                     if block.get("name") == "Skill" and inp.get("skill"):
-                        fired.append(normalize_skill(inp["skill"]))
+                        name = normalize_skill(inp["skill"])
                     elif block.get("name") == "Read":
                         m = re.search(r"/([^/]+)/SKILL\.md$", inp.get("file_path", ""))
-                        if m:
-                            fired.append(m.group(1))
+                        name = m.group(1) if m else None
+                    if name:
+                        pending[block.get("id", "")] = name
+        elif kind == "user":
+            for block in ev.get("message", {}).get("content") or []:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                name = pending.pop(block.get("tool_use_id"), None)
+                if name and not block.get("is_error"):
+                    loaded.append(name)
         elif kind == "system" and ev.get("subtype") == "permission_denied":
             tool = ev.get("tool_name") or (ev.get("tool") or {}).get("name") or "?"
             denied.append(tool)
@@ -107,7 +147,7 @@ def parse_stream(lines):
     answer = "\n".join(texts)
     if result_text and result_text not in answer:
         answer += "\n" + result_text
-    return {"fired": sorted(set(fired)), "answer": answer, "cost": cost, "turns": turns,
+    return {"fired": sorted(set(loaded)), "answer": answer, "cost": cost, "turns": turns,
             "denied": denied, "ended": ended}
 
 
@@ -206,16 +246,16 @@ def run_one(case, arm, args, known, meta):
         ]
         if arm == "noskills":
             cmd.append("--disable-slash-commands")
-        else:
-            for d in (REPO / "skills", Path.home() / ".claude/skills", Path.home() / ".agents/skills"):
-                cmd += ["--add-dir", str(d)]
+        # 技能只在夹具副本里的 .claude/skills（不再 --add-dir 真实技能目录，两臂对称）
         if args.model:
             cmd += ["--model", args.model]
+        env = {**os.environ, "CLAUDE_CONFIG_DIR": str(args.cc_config)}
         started = time.time()
         out, err, parsed, attempt = "", "", None, 0
         for attempt in range(RETRIES + 1):
             try:
-                proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, timeout=args.timeout)
+                proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True,
+                                      timeout=args.timeout, env=env)
                 out, err = proc.stdout, proc.stderr
             except subprocess.TimeoutExpired as e:
                 out, err = (e.stdout or ""), f"timeout>{args.timeout}s"
@@ -315,6 +355,7 @@ def main():
     ap.add_argument("--timeout", type=int, default=420)
     ap.add_argument("--model", default="")
     args = ap.parse_args()
+    args.cc_config = make_cc_config()
 
     cases = json.loads(CASES.read_text())
     if args.only:
@@ -325,15 +366,23 @@ def main():
     model = args.model or "env-default"
     args.stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + re.sub(r"[^A-Za-z0-9.]+", "-", model)
     jobs = [(c, a) for a in arms for c in cases for _ in range(args.runs)]
-    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        results = list(pool.map(lambda j: run_one(j[0], j[1], args, known, meta), jobs))
+    try:
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            results = list(pool.map(lambda j: run_one(j[0], j[1], args, known, meta), jobs))
+    finally:
+        shutil.rmtree(args.cc_config, ignore_errors=True)
 
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip()
+    ver = claude_version()
     text = (f"# 技能评估 {datetime.now():%Y-%m-%d %H:%M}（模型 {model}，fork HEAD {head}，"
-            f"runs={args.runs}，技能以 .claude/skills 注入夹具、剥掉 {','.join(SKILL_FM_DROP)}）"
+            f"claude {ver}，runs={args.runs}）\n"
+            f"隔离：空 CLAUDE_CONFIG_DIR = 无个人技能/插件/hook；技能以 .claude/skills 注入夹具"
+            f"（剥 {'、'.join(SKILL_FM_DROP) or '无'}）；触发只算加载成功的技能"
             + report(results, arms))
     RESULTS.mkdir(exist_ok=True)
-    (RESULTS / f"{args.stamp}.json").write_text(json.dumps({"head": head, "model": model, "results": results}, ensure_ascii=False, indent=2))
+    (RESULTS / f"{args.stamp}.json").write_text(json.dumps(
+        {"head": head, "model": model, "claude": ver, "isolated": True, "results": results},
+        ensure_ascii=False, indent=2))
     (RESULTS / f"{args.stamp}.md").write_text(text)
     print(text)
     sys.exit(1 if any(r["score"] is None for r in results) else 0)

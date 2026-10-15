@@ -21,14 +21,17 @@ python3 -m unittest test_scoring                 # 评分逻辑与用例集自�
 
 - 每个用例在夹具的**一次性副本**里跑（`--permission-mode acceptEdits`，写不到别处）；
   模型写出的新文件会并入内容评分，写文件不贴代码不算失败。
+- 环境隔离 = 空 `CLAUDE_CONFIG_DIR`（只把 `~/.claude/settings.json` 的 `env` 段带过去）：
+  个人技能、插件、个人 CLAUDE.md、用户级 hook（如 rtk，会改写 Bash 命令并压缩输出）都不加载。
+  实测技能清单从 81 降到 16（仓库）+ 15（claude 内置）。
 - 技能注入 = 把仓库 `skills/` 拷进夹具副本的 `.claude/skills/`（项目技能，init 清单里
   才看得到）；`--add-dir` 指向裸技能目录**不会**注册技能（实测 claude 2.1.285）。
   另：本机 claude 会因未知 frontmatter 键**整个丢弃**该技能，`paths` 即其一，注入时就地剥掉。
-- `--strict-mcp-config`（关 MCP）、`--tools` 白名单、`--allowedTools` 放行只读 Bash +
-  `Bash(rtk:*)`（用户级 hook 会把命令改写成 `rtk <子命令>`）+ `Skill`（否则 Skill 调用被拒）。
-  用户级个人技能仍会出现在 init 里，与历史轮次一致；`noskills` 臂不受影响。
+- `--strict-mcp-config`（关 MCP）、`--tools` 白名单、`--allowedTools` 放行只读 Bash（含
+  `rtk`，隔离失效时的防回归）+ `Skill`（否则 Skill 调用被拒）。两臂都不 `--add-dir`。
 - `noskills` 臂加 `--disable-slash-commands` 关掉全部技能，且不注入技能。
 - 注入的 `.claude/` 不计入产出物（否则技能正文会污染内容评分）。
+- **触发只算加载成功**：被权限拒/报错的 Skill 调用、没拿到结果的调用都不计（否则白送分）。
 - 没有 result 事件的半截回答按**基础设施失败**处理并从汇总剔除（超时会重试 2 次）。
 - 期望里含 `disable-model-invocation` 技能的用例记为 `human` 桶：模型不能用 Skill 工具
   加载它们（会被框架拒绝），只能靠 Read 或 `rails-conventions` 的路由发现——两个桶的
