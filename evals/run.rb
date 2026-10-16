@@ -279,7 +279,7 @@ def capture(cmd, chdir:, env:, timeout:, out_path:, err_path:)
     Timeout.timeout(timeout) { Process.wait(pid) }
   rescue Timeout::Error
     timed_out = true
-    ["-TERM", "-KILL"].each do |sig|
+    [:TERM, :KILL].each do |sig|   # 负 pid = 整组；"-TERM" 这种写法 Ruby 直接报 EINVAL
       begin
         Process.kill(sig, -pid)
       rescue Errno::ESRCH
@@ -451,7 +451,7 @@ end
 
 def parse_args(argv)
   args = { arms: "default", only: "", runs: 1, jobs: 3, max_turns: 40, budget: 2.0,
-           timeout: 600, model: "", bucket: "", rescore: "" }
+           timeout: 900, model: "", bucket: "", rescore: "" }
   OptionParser.new do |ap|
     ap.on("--arms ARMS", "逗号分隔，如 default,noskills") { |v| args[:arms] = v }
     ap.on("--only IDS", "只跑这些用例（逗号分隔）") { |v| args[:only] = v }
@@ -582,7 +582,7 @@ def main(argv)
               break
             rescue StandardError => e
               failed = e
-              warn "重试 #{kase['id']}/#{arm}：#{e.class}: #{e.message}"
+              warn "重试 #{kase['id']}/#{arm}：#{e.class}: #{e.message}\n  #{Array(e.backtrace).first(3).join("\n  ")}"
               sleep 5
             end
           end
