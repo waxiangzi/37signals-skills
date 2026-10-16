@@ -16,6 +16,7 @@ ruby evals/run.rb --only helper-naming --runs 3 --model cc/deepseek-flash   # �
 ruby evals/run.rb --bucket auto,negative --runs 3 --model cc/glm-5.3-flash  # 只跑不确定的桶
 ruby evals/test_run.rb                                                      # 评分逻辑与用例集自检（不花钱）
 ruby evals/check_rates.rb results/<stamp>.json --arm noskills                # 看哪些断言没有判别力
+ruby evals/compare.rb results/<A>.json results/<B>.json                      # 两个模型/两个臂并排
 ```
 
 结果落在 `results/<stamp>.md|.json`（不提交），原始 stream 在 `results/raw/`。
