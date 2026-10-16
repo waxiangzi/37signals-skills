@@ -309,8 +309,9 @@
     ],
     "expect_tools": [
       {
-        "name": "先看 diff/日志再评审（技能的规定动作）",
+        "name": "先看了代码（posts_controller.rb）或跑了 git diff/log",
         "cmd": [
+          "posts_controller\\.rb",
           "git diff",
           "git log",
           "git show"

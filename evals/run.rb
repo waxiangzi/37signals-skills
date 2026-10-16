@@ -105,6 +105,7 @@ def parse_stream(lines)
   loaded = []
   writes = []
   commands = [] # 模型实际跑过的 Bash 命令（行为轴）
+  reads = []    # 模型实际读过的文件（行为轴：评审类用例要求“先看了再评”）
   texts = []
   denied = []
   cost = 0.0
@@ -142,6 +143,7 @@ def parse_stream(lines)
                  end
           pending_write[block["id"].to_s] = [inp["file_path"], body] if body
           commands << inp["command"] if block["name"] == "Bash" && inp["command"]
+          reads << inp["file_path"].to_s if block["name"] == "Read" && inp["file_path"]
         end
       end
     when "user"
@@ -168,7 +170,8 @@ def parse_stream(lines)
   answer = texts.join("\n")
   answer += "\n#{result_text}" if result_text && !answer.include?(result_text)
   { "fired" => loaded.uniq.sort, "answer" => answer, "cost" => cost, "turns" => turns,
-    "denied" => denied, "ended" => ended, "writes" => writes, "commands" => commands }
+    "denied" => denied, "ended" => ended, "writes" => writes, "commands" => commands,
+    "reads" => reads }
 end
 
 # 没有 result 事件（超时/崩溃）或没有回答 = 基础设施失败，不是数据。
@@ -204,7 +207,8 @@ def score_case(kase, answer, parsed, known)
   end
 
   # 行为轴：技能除了“能说对”之外，还要求“真去跑”。比内容轴难造假得多。
-  behaviors = behaviors_for(kase, parsed["commands"], parsed["writes"])
+  behaviors = behaviors_for(kase, parsed["commands"],
+                            Array(parsed["writes"]) + Array(parsed["reads"]))
 
   passed = checks.count { |c| c["pass"] }
   beh_passed = behaviors.count { |b| b["pass"] }
@@ -287,12 +291,22 @@ def capture(cmd, chdir:, env:, timeout:, out_path:, err_path:)
   [File.read(out_path), timed_out ? "timeout>#{timeout}s" : File.read(err_path)]
 end
 
+# 夹具在仓库里就是一个 git 工作树，副本也该是：不然 `git diff`、`git show` 全跑不了。
+def init_git(workdir)
+  env = { "GIT_AUTHOR_NAME" => "eval", "GIT_AUTHOR_EMAIL" => "eval@localhost",
+          "GIT_COMMITTER_NAME" => "eval", "GIT_COMMITTER_EMAIL" => "eval@localhost" }
+  ["git init -q", "git add -A", "git commit -qm fixture"].each do |c|
+    system(env, *Shellwords.split(c), chdir: workdir, out: File::NULL, err: File::NULL)
+  end
+end
+
 def run_one(kase, arm, args, known, meta, run_no = 1)
   workdir = Dir.mktmpdir("skilleval-#{kase['id']}-")
   tmp = Dir.mktmpdir("skilleval-io-")
   begin
     FileUtils.cp_r(File.join(FIXTURE, "."), workdir)
     stage_skills(workdir) unless arm == "noskills"
+    init_git(workdir)
 
     cmd = ["claude", "-p", kase["prompt"],
            "--output-format", "stream-json", "--verbose",
@@ -340,6 +354,7 @@ def run_one(kase, arm, args, known, meta, run_no = 1)
       "error" => errored ? (err.strip[-200..].to_s.empty? ? "无 result 事件" : err.strip[-200..]) : nil,
       "score" => errored ? nil : score_case(kase, answer, parsed, known),
       "commands" => parsed["commands"].first(40).map { |c| c[0, 200] },
+      "reads" => parsed["reads"].first(40),
       "answer_head" => parsed["answer"][0, 300] }
   ensure
     FileUtils.remove_entry(workdir, true)
@@ -479,7 +494,8 @@ def rescore(source, model)
                   passed = kept.count { |c| c["pass"] }
                   # 老结果里没有 commands（那时还没记）：别硬算成 0，沿用存档的判定
                   beh = if r.key?("commands")
-                          behaviors_for(cases[r["case"]], r["commands"], Array(r["artifacts"]).map { |a| "--- #{a} ---" })
+                          behaviors_for(cases[r["case"]], r["commands"],
+                                        Array(r["artifacts"]).map { |a| "--- #{a} ---" } + Array(r["reads"]))
                         else
                           (r["score"]["behaviors"] || [])
                         end
@@ -504,6 +520,7 @@ def rescore(source, model)
           "artifacts" => parsed["writes"].map { |a| a.lines.first.to_s.strip.delete_prefix("--- ").delete_suffix(" ---") },
           "error" => errored ? "无 result 事件" : nil,
           "commands" => parsed["commands"].first(40).map { |c| c[0, 200] },
+          "reads" => parsed["reads"].first(40),
           "score" => errored ? nil : score_case(cases[cid], answer, parsed, known),
           "answer_head" => parsed["answer"][0, 300] }
       end
@@ -557,15 +574,25 @@ def main(argv)
       Thread.new do
         loop do
           i, (kase, arm, run_no) = queue.pop(true)
-          begin
-            results[i] = run_one(kase, arm, args, known, meta, run_no)
-          rescue StandardError => e
-            errors << e
-            results[i] = { "case" => kase["id"], "arm" => arm, "bucket" => case_bucket(kase, meta),
-                           "seconds" => 0, "cost" => 0.0, "turns" => 0, "denied" => [],
-                           "attempts" => 0, "ended" => nil, "truncated" => true, "artifacts" => [],
-                           "error" => "#{e.class}: #{e.message}", "score" => nil, "answer_head" => "" }
+          failed = nil
+          2.times do |attempt|
+            begin
+              results[i] = run_one(kase, arm, args, known, meta, run_no)
+              failed = nil
+              break
+            rescue StandardError => e
+              failed = e
+              warn "重试 #{kase['id']}/#{arm}：#{e.class}: #{e.message}"
+              sleep 5
+            end
           end
+          next unless failed
+          errors << failed
+          results[i] = { "case" => kase["id"], "arm" => arm, "bucket" => case_bucket(kase, meta),
+                         "seconds" => 0, "cost" => 0.0, "turns" => 0, "denied" => [],
+                         "attempts" => 0, "ended" => nil, "truncated" => true, "artifacts" => [],
+                         "error" => "#{failed.class}: #{failed.message} @ #{failed.backtrace&.first}",
+                         "score" => nil, "answer_head" => "" }
         end
       rescue ThreadError
         nil
