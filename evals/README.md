@@ -4,6 +4,8 @@
 
 - **触发**：用了该用的技能吗？（反例 = 不该用时一次都没加载）
 - **内容**：回答里出现了技能才会讲的判据吗？（正则断言，`avoid` 可排除）
+- **行为**：技能规定的动作真做了吗？（`expect_tools`：跑没跑那道门、写没写出那个文件）
+  语言可以照抄，行为不会 —— 内容轴在强基座上会顶到天花板，行为轴不会。
 - **技能增益**：`--arms default,noskills` 跑无技能基线，内容通过率之差。
 
 ## 用法
@@ -13,6 +15,7 @@ ruby evals/run.rb --arms default,noskills --jobs 3 --model cc/deepseek-flash
 ruby evals/run.rb --only helper-naming --runs 3 --model cc/deepseek-flash   # 单用例复跑
 ruby evals/run.rb --bucket auto,negative --runs 3 --model cc/glm-5.3-flash  # 只跑不确定的桶
 ruby evals/test_run.rb                                                      # 评分逻辑与用例集自检（不花钱）
+ruby evals/check_rates.rb results/<stamp>.json --arm noskills                # 看哪些断言没有判别力
 ```
 
 结果落在 `results/<stamp>.md|.json`（不提交），原始 stream 在 `results/raw/`。
@@ -60,8 +63,15 @@ ruby evals/test_run.rb                                                      # �
 `test_run.rb` 会校验技能名存在、正则可编译、正反例都在。
 
 **内容断言要有判别力**：基座模型不加载技能也照答的断言（例如"提到 `_helper` 后缀"）
-不测任何东西 —— 先跑 `--arms noskills --runs 3` 预筛，通过率 ≥ 90% 的断言要么删，
-要么换成技能里真正反直觉的那条（框架静默失败、`after_commit` 才清状态、门住在 gem 里……）。
+不测任何东西 —— 先跑 `--arms noskills --runs 3` 预筛，再用 `check_rates.rb` 看每条断言的
+通过率：≥ 90% 的要么删、要么换成技能里真正反直觉的那条（框架静默失败、`after_commit`
+才清状态、门住在 gem 里……）；0% 的看是措辞对不上还是断言写错了。
+改断言不影响已跑的数据：原始 stream 都在 `results/raw/`，`ruby evals/run.rb --rescore <raw 目录名>`
+（或 `--rescore results/<stamp>.json`）用当前用例集重新打分即可，不用重跑。
+
+**预筛已经剪过一轮**（`20261016-081106`/`082347`，两模型各 3 轮无技能）：40 条断言里 27 条
+两个模型都 3/3 全中，已删。剩下的 13 条才是真有判别力的（`after_commit` 清状态、`params.expect`、
+哪些不用测、`0 errors` 要单独盯……），另有 5 条用例只剩触发轴（报告里显示“未测”）。
 
 ## 注意
 

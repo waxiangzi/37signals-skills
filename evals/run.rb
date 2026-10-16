@@ -101,7 +101,10 @@ end
 # 计成 fired 会白送一分（历史上 mac 轮没放行 Skill，系统性高估就在这里）。
 def parse_stream(lines)
   pending = {}   # tool_use_id -> skill 名
+  pending_write = {} # tool_use_id -> 写文件的内容（供重打分用）
   loaded = []
+  writes = []
+  commands = [] # 模型实际跑过的 Bash 命令（行为轴）
   texts = []
   denied = []
   cost = 0.0
@@ -132,13 +135,24 @@ def parse_stream(lines)
               inp["file_path"].to_s[%r{/([^/]+)/SKILL\.md\z}, 1]
             end
           pending[block["id"].to_s] = name if name
+          body = case block["name"]
+                 when "Write" then inp["content"]
+                 when "Edit" then inp["new_string"]
+                 when "MultiEdit" then Array(inp["edits"]).map { |e| e["new_string"] }.join("\n")
+                 end
+          pending_write[block["id"].to_s] = [inp["file_path"], body] if body
+          commands << inp["command"] if block["name"] == "Bash" && inp["command"]
         end
       end
     when "user"
       Array(ev.dig("message", "content")).each do |block|
         next unless block.is_a?(Hash) && block["type"] == "tool_result"
-        name = pending.delete(block["tool_use_id"].to_s)
+        tid = block["tool_use_id"].to_s
+        name = pending.delete(tid)
         loaded << name if name && !block["is_error"]
+        # 模型写出的文件正文也在事件流里：存下来，这样改断言后能照原样重打分
+        file, body = pending_write.delete(tid)
+        writes << "--- #{file} ---\n#{body}" if file && body && !block["is_error"]
       end
     when "system"
       next unless ev["subtype"] == "permission_denied"
@@ -154,7 +168,7 @@ def parse_stream(lines)
   answer = texts.join("\n")
   answer += "\n#{result_text}" if result_text && !answer.include?(result_text)
   { "fired" => loaded.uniq.sort, "answer" => answer, "cost" => cost, "turns" => turns,
-    "denied" => denied, "ended" => ended }
+    "denied" => denied, "ended" => ended, "writes" => writes, "commands" => commands }
 end
 
 # 没有 result 事件（超时/崩溃）或没有回答 = 基础设施失败，不是数据。
@@ -163,6 +177,15 @@ def run_failed?(parsed)
 end
 
 # ---------------------------------------------------------------- 评分
+
+# 行为轴：expect_tools 每条要求至少有一条实际跑过的命令（或写出的文件路径）命中它。
+def behaviors_for(kase, commands, writes = [])
+  hay = Array(commands) + Array(writes)
+  Array(kase["expect_tools"]).map do |b|
+    hit = hay.any? { |c| Array(b["cmd"]).any? { |p| c.to_s.match?(Regexp.new(p, Regexp::IGNORECASE)) } }
+    { "name" => b["name"], "pass" => hit }
+  end
+end
 
 def score_case(kase, answer, parsed, known)
   fired = parsed["fired"] & known
@@ -180,9 +203,15 @@ def score_case(kase, answer, parsed, known)
     { "name" => check["name"], "pass" => hit }
   end
 
+  # 行为轴：技能除了“能说对”之外，还要求“真去跑”。比内容轴难造假得多。
+  behaviors = behaviors_for(kase, parsed["commands"], parsed["writes"])
+
   passed = checks.count { |c| c["pass"] }
+  beh_passed = behaviors.count { |b| b["pass"] }
   { "trigger_kind" => trigger_kind, "trigger" => trigger, "fired" => fired.sort,
-    "checks" => checks, "content" => checks.empty? ? 1.0 : passed.to_f / checks.size }
+    "checks" => checks, "content" => checks.empty? ? nil : passed.to_f / checks.size,
+    "behaviors" => behaviors,
+    "behavior" => behaviors.empty? ? nil : beh_passed.to_f / behaviors.size }
 end
 
 # ---------------------------------------------------------------- 夹具
@@ -258,7 +287,7 @@ def capture(cmd, chdir:, env:, timeout:, out_path:, err_path:)
   [File.read(out_path), timed_out ? "timeout>#{timeout}s" : File.read(err_path)]
 end
 
-def run_one(kase, arm, args, known, meta)
+def run_one(kase, arm, args, known, meta, run_no = 1)
   workdir = Dir.mktmpdir("skilleval-#{kase['id']}-")
   tmp = Dir.mktmpdir("skilleval-io-")
   begin
@@ -294,10 +323,12 @@ def run_one(kase, arm, args, known, meta)
 
     raw_dir = File.join(RESULTS, "raw", args[:stamp])
     FileUtils.mkdir_p(raw_dir)
-    Zlib::GzipWriter.open(File.join(raw_dir, "#{arm}--#{kase['id']}.jsonl.gz")) { |gz| gz.write(out) }
+    # 文件名必须带轮次：`--runs 3` 时同名会互相覆盖，原始 stream 一丢就没法重打分
+    raw_name = [arm, kase["id"], "r#{run_no}"].join("--") + ".jsonl.gz"
+    Zlib::GzipWriter.open(File.join(raw_dir, raw_name)) { |gz| gz.write(out) }
 
     errored = run_failed?(parsed)
-    artifacts = collect_artifacts(workdir)
+    artifacts = collect_artifacts(workdir) + parsed["writes"]
     answer = (parsed["answer"] + "\n" + artifacts.join("\n"))[0, ANSWER_CAP]
 
     { "case" => kase["id"], "arm" => arm, "bucket" => case_bucket(kase, meta),
@@ -308,6 +339,7 @@ def run_one(kase, arm, args, known, meta)
       "artifacts" => artifacts.map { |a| a.lines.first.to_s.strip.delete_prefix("--- ").delete_suffix(" ---") },
       "error" => errored ? (err.strip[-200..].to_s.empty? ? "无 result 事件" : err.strip[-200..]) : nil,
       "score" => errored ? nil : score_case(kase, answer, parsed, known),
+      "commands" => parsed["commands"].first(40).map { |c| c[0, 200] },
       "answer_head" => parsed["answer"][0, 300] }
   ensure
     FileUtils.remove_entry(workdir, true)
@@ -318,6 +350,7 @@ end
 # ---------------------------------------------------------------- 汇总 / 报告
 
 def mean(xs)
+  xs = xs.compact
   xs.empty? ? nil : xs.sum.to_f / xs.size
 end
 
@@ -327,7 +360,9 @@ def aggregate(results)
   pos = default.select { |r| r["score"]["trigger_kind"] == "positive" }
   neg = default.select { |r| r["score"]["trigger_kind"] == "negative" }
   # 内容轴只看正例：反例的内容断言（“GIL 是什么”）谁都能答对，混进来会系统抬高通过率
-  content = ok.select { |r| r["score"]["trigger_kind"] == "positive" }.map { |r| r["score"]["content"] }
+  positive = ok.select { |r| r["score"]["trigger_kind"] == "positive" }
+  content = positive.map { |r| r["score"]["content"] }
+  behavior = positive.map { |r| r["score"]["behavior"] }
   fired_count = Hash.new(0)
   ok.each { |r| r["score"]["fired"].each { |s| fired_count[s] += 1 } }
 
@@ -335,8 +370,9 @@ def aggregate(results)
     "trigger_recall" => mean(pos.map { |r| r["score"]["trigger"] ? 1 : 0 }),
     "false_trigger_rate" => mean(neg.map { |r| r["score"]["trigger"] ? 0 : 1 }),
     "content" => mean(content),
-    "composite" => mean(default.select { |r| r["score"]["trigger_kind"] == "positive" }
-                          .map { |r| 0.5 * (r["score"]["trigger"] ? 1 : 0) + 0.5 * r["score"]["content"] }),
+    "behavior" => mean(behavior),
+    "composite" => mean(pos.select { |r| r["score"]["content"] }
+                            .map { |r| 0.5 * (r["score"]["trigger"] ? 1 : 0) + 0.5 * r["score"]["content"] }),
     "cost" => results.sum { |r| r["cost"].to_f },
     "fired_count" => fired_count.sort_by { |k, v| [-v, k] }.to_h }
 end
@@ -361,24 +397,28 @@ def report(results, arms)
       lines << "- 各技能被触发次数：#{agg['fired_count'].inspect}"
     end
     lines << "- 内容通过率（正例）：#{pct(agg['content'])}"
+    lines << "- 行为轴（要求真去跑的门）：#{pct(agg['behavior'])}"
     lines << "- 综合分（触发 50% + 内容 50%）：#{pct(agg['composite'])}" if arm == "default"
     trunc = rs.select { |r| r["truncated"] }.map { |r| r["case"] }
     lines << "- ⚠ 被 max-turns/预算截断（内容分不可信）：#{trunc.inspect}" unless trunc.empty?
 
     lines << ""
-    lines << "| 用例 | 触发 | 内容 | 触发了 | 秒 | $ |"
-    lines << "|---|---|---|---|---|---|"
+    lines << "| 用例 | 触发 | 内容 | 行为 | 触发了 | 秒 | $ |"
+    lines << "|---|---|---|---|---|---|---|"
     rs.each do |r|
       unless r["score"]
-        lines << "| #{r['case']} | 失败 | - | #{r['error']} | #{r['seconds']} | #{format('%.2f', r['cost'])} |"
+        lines << "| #{r['case']} | 失败 | - | - | #{r['error']} | #{r['seconds']} | #{format('%.2f', r['cost'])} |"
         next
       end
       s = r["score"]
       ok_checks = s["checks"].count { |c| c["pass"] }
+      beh = s["behaviors"]
+      beh_cell = beh.empty? ? "-" : "#{beh.count { |b| b['pass'] }}/#{beh.size}"
+      content_cell = s["checks"].empty? ? "未测" : "#{ok_checks}/#{s['checks'].size}"
       trig = arm == "noskills" ? "-" : (s["trigger"] ? "✓" : "✗")
       denied = r["denied"].empty? ? "" : " /#{r['denied'].size}拒"
       fired = s["fired"].empty? ? "-" : s["fired"].join(",")
-      lines << "| #{r['case']} | #{trig} | #{ok_checks}/#{s['checks'].size} | #{fired} | #{r['seconds']}#{denied} | #{format('%.2f', r['cost'])} |"
+      lines << "| #{r['case']} | #{trig} | #{content_cell} | #{beh_cell} | #{fired} | #{r['seconds']}#{denied} | #{format('%.2f', r['cost'])} |"
     end
   end
 
@@ -396,7 +436,7 @@ end
 
 def parse_args(argv)
   args = { arms: "default", only: "", runs: 1, jobs: 3, max_turns: 40, budget: 2.0,
-           timeout: 600, model: "", bucket: "" }
+           timeout: 600, model: "", bucket: "", rescore: "" }
   OptionParser.new do |ap|
     ap.on("--arms ARMS", "逗号分隔，如 default,noskills") { |v| args[:arms] = v }
     ap.on("--only IDS", "只跑这些用例（逗号分隔）") { |v| args[:only] = v }
@@ -407,12 +447,82 @@ def parse_args(argv)
     ap.on("--budget USD", Float) { |v| args[:budget] = v }
     ap.on("--timeout SEC", Integer) { |v| args[:timeout] = v }
     ap.on("--model ID") { |v| args[:model] = v }
+    ap.on("--rescore SRC", "不跑模型：用当前 cases.json 重打结果（results/raw/<STAMP> 或 results/<STAMP>.json）") { |v| args[:rescore] = v }
   end.parse(argv)
   args
 end
 
+# 原始 stream 的文件名（归一成一个地方，重打分靠它拆分）
+def raw_parts(basename)
+  stem = basename.sub(/\.jsonl\.gz\z/, "")
+  parts = stem.split("--")
+  run_no = parts.last.to_s.match?(/\Ar\d+\z/) ? parts.pop.delete_prefix("r").to_i : 1
+  [parts[0], parts[1], run_no]
+end
+
+# 改断言后不必重跑：用当前 cases.json 重新打分。
+# 两种源都行：results/raw/<stamp>（原始事件流）或 results/<stamp>.json（已跑但被删了断言的旧结果）。
+def rescore(source, model)
+  cases = JSON.parse(File.read(CASES)).to_h { |c| [c["id"], c] }
+  known = known_skills
+  meta = skill_meta
+  out =
+    if source.end_with?(".json")
+      stale = JSON.parse(File.read(source))["results"]
+      stale.map do |r|
+        kept = r["score"] && r["score"]["checks"].select do |c|
+          Array(cases[r["case"]]["checks"]).any? { |k| k["name"] == c["name"] }
+        end
+        score = if r["score"].nil?
+                  nil
+                else
+                  passed = kept.count { |c| c["pass"] }
+                  # 老结果里没有 commands（那时还没记）：别硬算成 0，沿用存档的判定
+                  beh = if r.key?("commands")
+                          behaviors_for(cases[r["case"]], r["commands"], Array(r["artifacts"]).map { |a| "--- #{a} ---" })
+                        else
+                          (r["score"]["behaviors"] || [])
+                        end
+                  r["score"].merge("checks" => kept, "behaviors" => beh,
+                                   "behavior" => beh.empty? ? nil : beh.count { |b| b["pass"] }.to_f / beh.size,
+                                   "content" => kept.empty? ? nil : passed.to_f / kept.size)
+                end
+        r.merge("score" => score)
+      end
+    else
+      dir = File.join(RESULTS, "raw", source)
+      abort "没有 #{dir}" unless Dir.exist?(dir)
+      Dir[File.join(dir, "*.jsonl.gz")].sort.map do |path|
+        arm, cid, run_no = raw_parts(File.basename(path))
+        parsed = Zlib::GzipReader.open(path) { |gz| parse_stream(gz.read.split("\n")) }
+        answer = (parsed["answer"] + "\n" + parsed["writes"].join("\n"))[0, ANSWER_CAP]
+        errored = run_failed?(parsed)
+        { "case" => cid, "arm" => arm, "run" => run_no, "bucket" => case_bucket(cases[cid], meta),
+          "seconds" => 0, "cost" => parsed["cost"], "turns" => parsed["turns"],
+          "denied" => parsed["denied"], "attempts" => 1, "ended" => parsed["ended"],
+          "truncated" => ![nil, "success"].include?(parsed["ended"]),
+          "artifacts" => parsed["writes"].map { |a| a.lines.first.to_s.strip.delete_prefix("--- ").delete_suffix(" ---") },
+          "error" => errored ? "无 result 事件" : nil,
+          "commands" => parsed["commands"].first(40).map { |c| c[0, 200] },
+          "score" => errored ? nil : score_case(cases[cid], answer, parsed, known),
+          "answer_head" => parsed["answer"][0, 300] }
+      end
+    end
+
+  arms = out.map { |r| r["arm"] }.uniq.sort
+  text = +"# 重新打分 #{Time.now.strftime('%Y-%m-%d %H:%M')}（源 #{File.basename(source)}，模型 #{model}，用例集 = 当前 cases.json）\n"
+  text << "只保留当前 cases.json 里还在的断言"
+  text << report(out, arms)
+  File.write(File.join(RESULTS, "#{File.basename(source, '.json')}.rescore.md"), text)
+  File.write(File.join(RESULTS, "#{File.basename(source, '.json')}.rescore.json"),
+             JSON.pretty_generate({ "rescore_of" => source, "results" => out }))
+  puts text
+end
+
 def main(argv)
   args = parse_args(argv)
+  return rescore(args[:rescore], args[:model]) unless args[:rescore].to_s.empty?
+
   known = known_skills
   meta = skill_meta
   cases = JSON.parse(File.read(CASES))
@@ -431,7 +541,11 @@ def main(argv)
   args[:cc_config] = make_cc_config
 
   jobs = []
-  arms.each { |a| cases.each { |c| args[:runs].times { jobs << [c, a] } } }
+  arms.each do |a|
+    cases.each do |c|
+      (1..args[:runs]).each { |n| jobs << [c, a, n] }
+    end
+  end
 
   results = Array.new(jobs.size)
   queue = Queue.new
@@ -442,9 +556,9 @@ def main(argv)
     workers.times.map do
       Thread.new do
         loop do
-          i, (kase, arm) = queue.pop(true)
+          i, (kase, arm, run_no) = queue.pop(true)
           begin
-            results[i] = run_one(kase, arm, args, known, meta)
+            results[i] = run_one(kase, arm, args, known, meta, run_no)
           rescue StandardError => e
             errors << e
             results[i] = { "case" => kase["id"], "arm" => arm, "bucket" => case_bucket(kase, meta),

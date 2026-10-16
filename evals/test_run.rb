@@ -57,14 +57,29 @@ class CaseFileTest < Minitest::Test
     end
   end
 
-  def test_regexes_compile_and_checks_nonempty
+  def test_regexes_compile
     TEST_CASES.each do |c|
-      refute_empty Array(c["checks"]), c["id"]
-      c["checks"].each do |chk|
+      Array(c["checks"]).each do |chk|
         refute_empty Array(chk["any"]), "#{c['id']}/#{chk['name']}"
         (Array(chk["any"]) + Array(chk["avoid"])).each do |p|
           assert_silent { Regexp.new(p) }
         end
+      end
+    end
+  end
+
+  def test_axes_are_not_silently_empty
+    # 预筛会剪掉没有判别力的断言；剪空即只剩触发轴（报告里显示“未测”）。
+    # 这里只守住“量表整体不为空”，否则跑完一轮什么都没测也看不出来。
+    refute_empty TEST_CASES.flat_map { |c| Array(c["checks"]) }
+    refute_empty TEST_CASES.flat_map { |c| Array(c["expect_tools"]) }
+  end
+
+  def test_expect_tools_regexes_compile
+    TEST_CASES.each do |c|
+      Array(c["expect_tools"]).each do |b|
+        refute_empty Array(b["cmd"]), "#{c['id']}/#{b['name']}"
+        Array(b["cmd"]).each { |p| assert_silent { Regexp.new(p) } }
       end
     end
   end
@@ -289,5 +304,12 @@ class ScoreTest < Minitest::Test
     agg = aggregate([])
     assert_equal 0, agg["n"]
     assert_nil agg["trigger_recall"] # nil，不是静默的 0
+  end
+end
+
+class RawNameTest < Minitest::Test
+  def test_parts_with_and_without_run_index
+    assert_equal ["default", "helper-naming", 1], raw_parts("default--helper-naming.jsonl.gz")
+    assert_equal ["noskills", "helper-naming", 3], raw_parts("noskills--helper-naming--r3.jsonl.gz")
   end
 end

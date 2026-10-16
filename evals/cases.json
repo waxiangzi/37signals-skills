@@ -2,12 +2,11 @@
   {
     "id": "helper-naming",
     "prompt": "我想在 app/helpers 下新建 post_format.rb，放几个文本格式化方法。命名上要注意什么？只回答，不要写文件。",
-    "expect_any": ["rails-conventions", "rails-best-practices-core"],
+    "expect_any": [
+      "rails-conventions",
+      "rails-best-practices-core"
+    ],
     "checks": [
-      {
-        "name": "给出正确的文件名/常量名",
-        "any": ["post_format_helper", "PostFormatHelper"]
-      },
       {
         "name": "点名这是静默失败：收录只扫 *_helper.rb，zeitwerk:check 抓不到",
         "any": [
@@ -19,19 +18,34 @@
       },
       {
         "name": "后果是视图里才炸（undefined method / 根本没被收录）",
-        "any": ["undefined method", "未收录", "不被收录", "收录不到", "没被收录", "静默"]
+        "any": [
+          "undefined method",
+          "未收录",
+          "不被收录",
+          "收录不到",
+          "没被收录",
+          "静默"
+        ]
+      }
+    ],
+    "expect_tools": [
+      {
+        "name": "跑了 helper 收录探针或 zeitwerk:check",
+        "cmd": [
+          "all_helpers_from_path",
+          "zeitwerk:check"
+        ]
       }
     ]
   },
   {
     "id": "helper-view-collision",
     "prompt": "我打算在 PostsHelper 里加一个叫 form_id 的方法。Rails 默认把所有 helper 都 include 进每个视图，这样做有什么风险？",
-    "expect_any": ["rails-conventions", "rails-best-practices-core"],
+    "expect_any": [
+      "rails-conventions",
+      "rails-best-practices-core"
+    ],
     "checks": [
-      {
-        "name": "指出同名方法冲突/覆盖",
-        "any": ["冲突", "覆盖", "同名", "collid", "shadow", "override"]
-      },
       {
         "name": "点出被覆盖的包括 ActionView 自己的（私有）方法",
         "any": [
@@ -60,7 +74,10 @@
   {
     "id": "verification-gates",
     "prompt": "我改完代码后只跑了 bin/rails test，全绿。这样能算验证完成吗？这个项目还应该跑哪些？",
-    "expect_any": ["rails-conventions", "rails-testing"],
+    "expect_any": [
+      "rails-conventions",
+      "rails-testing"
+    ],
     "checks": [
       {
         "name": "0 failures 与 0 errors 是两个数，errors 要单独盯",
@@ -75,91 +92,57 @@
           "两个计数",
           "分开计数"
         ]
+      }
+    ],
+    "expect_tools": [
+      {
+        "name": "真去跑了 bin/rails test",
+        "cmd": [
+          "bin/rails test",
+          "bin/rake test"
+        ]
       },
       {
-        "name": "bin/rails test 不含系统测试，要单跑 test:system",
-        "any": ["test:system", "test/system", "系统测试", "system test"],
-        "avoid": ["bin/rails test[\\s\\S]{0,40}(包含|涵盖|覆盖|包括)[\\s\\S]{0,12}(系统|system)"]
-      },
-      {
-        "name": "zeitwerk:check 或 rubocop",
-        "any": ["zeitwerk:check", "zeitwerk", "rubocop"]
+        "name": "真去跑了 zeitwerk:check 或 rubocop",
+        "cmd": [
+          "zeitwerk:check",
+          "rubocop"
+        ]
       }
     ]
   },
   {
     "id": "assignment-writes-early",
     "prompt": "看 app/models/post.rb 的 tag_names=：它里面直接 self.tags = ...。用户提交表单、标题校验失败时，已有文章的标签会怎样？怎么改？",
-    "expect_any": ["rails-conventions", "rails-best-practices-core"],
+    "expect_any": [
+      "rails-conventions",
+      "rails-best-practices-core"
+    ],
     "checks": [
       {
-        "name": "识别出赋值即写库（先于校验）",
-        "any": ["立即", "马上", "直接写", "已经写", "校验之前", "校验前", "before validation", "persist", "immediately"]
-      },
-      {
-        "name": "修法：writer 里暂存，after_save 里落地",
-        "any": ["after_save", "@tag_names", "实例变量", "暂存", "stash", "pending"]
-      },
-      {
         "name": "在 after_commit 里清空（外层事务回滚时保留，供 422 重显）",
-        "any": ["after_commit", "after_save_commit"]
+        "any": [
+          "after_commit",
+          "after_save_commit"
+        ]
       }
     ]
   },
   {
     "id": "jobs-idempotent",
     "prompt": "CommentNotificationJob 在 update! 之前如果抛错，重试时会重复发邮件。怎么把它改成幂等的？",
-    "expect_any": ["rails-jobs"],
-    "checks": [
-      {
-        "name": "给出幂等标记思路（notified_at）",
-        "any": ["幂等", "idempot", "notified_at", "已通知"]
-      },
-      {
-        "name": "进入前先判断/早退，标记与发送的顺序有讲究",
-        "any": [
-          "return if",
-          "早退",
-          "提前返回",
-          "先判断",
-          "已经通知",
-          "已发过",
-          "跳过",
-          "notified_at[\\s\\S]{0,20}(present|nil)",
-          "unless[\\s\\S]{0,30}notified_at"
-        ]
-      },
-      {
-        "name": "并发安全：唯一约束/锁/事务，撞上 RecordNotUnique 也安全",
-        "any": ["唯一索引", "unique", "RecordNotUnique", "锁", "lock", "事务", "原子", "atomic"]
-      }
-    ]
+    "expect_any": [
+      "rails-jobs"
+    ],
+    "checks": []
   },
   {
     "id": "migration-not-null",
     "prompt": "我要给 posts 表加一个 NOT NULL 的 slug 列，表里有几百万行，在线迁移怎么写才安全？",
-    "expect_any": ["rails-migrations"],
+    "expect_any": [
+      "rails-migrations"
+    ],
     "checks": [
-      {
-        "name": "分步：先可空 → 回填 → 再加约束",
-        "any": ["回填", "backfill", "分步", "分三步", "先加[\\s\\S]{0,12}可空", "null: true", "nullable"]
-      },
-      {
-        "name": "分批 + 不长时间锁表的手段",
-        "any": [
-          "in_batches",
-          "find_each",
-          "分批",
-          "batch",
-          "disable_ddl_transaction",
-          "concurrently",
-          "algorithm: :concurrently",
-          "NOT VALID",
-          "not_valid",
-          "validate_constraint",
-          "CHECK 约束"
-        ]
-      },
       {
         "name": "大回填移出迁移窗口，或迁移里不碰 app 模型（用 SQL）",
         "any": [
@@ -176,108 +159,94 @@
           "inline AR"
         ]
       }
-    ]
-  },
-  {
-    "id": "webhook-receive",
-    "prompt": "我要接收 Stripe 的 webhook：怎么验证签名，并保证同一个事件被重复投递时不会重复处理？",
-    "expect_any": ["rails-webhooks"],
-    "checks": [
+    ],
+    "expect_tools": [
       {
-        "name": "验签（construct_event / HMAC + 时间戳）",
-        "any": ["签名", "signature", "construct_event", "HMAC", "secure_compare"]
-      },
-      {
-        "name": "去重落在数据库层（event id 唯一索引），不是先查后写",
-        "any": ["唯一索引", "unique index", "unique: true", "add_index[\\s\\S]{0,30}unique", "ON CONFLICT", "RecordNotUnique", "唯一约束"]
-      },
-      {
-        "name": "先落库/先 200 再异步处理，或回源取权威状态",
-        "any": [
-          "先[\\s\\S]{0,10}(落库|入库|持久化|记录|建一条)",
-          "立即[\\s\\S]{0,10}200",
-          "马上[\\s\\S]{0,10}200",
-          "异步",
-          "perform_later",
-          "enqueue",
-          "回源",
-          "重新获取",
-          "以 API 为准",
-          "不要相信 payload"
+        "name": "读了 db/schema.rb 或迁移目录",
+        "cmd": [
+          "schema\\.rb",
+          "db/migrate"
         ]
       }
     ]
   },
   {
+    "id": "webhook-receive",
+    "prompt": "我要接收 Stripe 的 webhook：怎么验证签名，并保证同一个事件被重复投递时不会重复处理？",
+    "expect_any": [
+      "rails-webhooks"
+    ],
+    "checks": []
+  },
+  {
     "id": "multitenancy-scope",
     "prompt": "我想给 Post 加多租户：每个 account 只能看到自己的文章。怎么设计才不会在某个查询里漏掉租户条件？",
-    "expect_any": ["rails-security-multitenancy"],
-    "checks": [
-      {
-        "name": "从关联/当前租户出发，而不是处处手写 where",
-        "any": ["Current\\.account", "account\\.posts", "has_many :posts", "通过关联", "从 account 出发"]
-      },
-      {
-        "name": "数据库层兜底：account_id 列 + 复合唯一/外键",
-        "any": ["account_id", "复合索引", "composite", "外键", "foreign key", "唯一索引", "unique"]
-      },
-      {
-        "name": "测试兜底：跨租户访问要断言被拒（404/403）",
-        "any": ["404", "not_found", "403", "forbidden", "拒绝", "测试", "test"]
-      }
-    ]
+    "expect_any": [
+      "rails-security-multitenancy"
+    ],
+    "checks": []
   },
   {
     "id": "turbo-stream-broadcast",
     "prompt": "评论创建后，要把新评论实时推给其他正在看这篇文章的人。用 Turbo Streams 怎么做？",
-    "expect_any": ["rails-hotwire-realtime", "hwc-realtime-streaming"],
+    "expect_any": [
+      "rails-hotwire-realtime",
+      "hwc-realtime-streaming"
+    ],
     "checks": [
       {
         "name": "视图侧 turbo_stream_from 订阅",
-        "any": ["turbo_stream_from"]
+        "any": [
+          "turbo_stream_from"
+        ]
       },
       {
         "name": "服务端广播 API（broadcast_append/replace 或 broadcasts_to）",
-        "any": ["broadcast_append", "broadcast_replace", "broadcast_prepend", "broadcasts_to", "broadcast_"]
+        "any": [
+          "broadcast_append",
+          "broadcast_replace",
+          "broadcast_prepend",
+          "broadcasts_to",
+          "broadcast_"
+        ]
       },
       {
         "name": "广播挂在模型回调（after_create_commit / concern），不在控制器",
-        "any": ["after_create_commit", "after_commit", "concern", "模型里", "模型层"]
+        "any": [
+          "after_create_commit",
+          "after_commit",
+          "concern",
+          "模型里",
+          "模型层"
+        ]
       }
     ]
   },
   {
     "id": "stimulus-clipboard",
     "prompt": "写一个 Stimulus controller：点击按钮把一段文本复制到剪贴板，按钮上短暂显示“已复制”，并确保不会泄漏定时器。",
-    "expect_any": ["hwc-stimulus-fundamentals", "hwc-ux-feedback"],
-    "checks": [
+    "expect_any": [
+      "hwc-stimulus-fundamentals",
+      "hwc-ux-feedback"
+    ],
+    "checks": [],
+    "expect_tools": [
       {
-        "name": "disconnect 里清理",
-        "any": ["disconnect"]
-      },
-      {
-        "name": "定时器存实例属性并 clearTimeout（不是局部变量）",
-        "any": ["clearTimeout", "clearInterval", "this\\.timeout", "this\\.timer", "this\\.#", "@timeout"]
-      },
-      {
-        "name": "用 navigator.clipboard.writeText",
-        "any": ["navigator\\.clipboard", "clipboard\\.writeText"]
+        "name": "真写出了 controller 文件（app/javascript/controllers）",
+        "cmd": [
+          "clipboard_controller\\.js",
+          "app/javascript/controllers/"
+        ]
       }
     ]
   },
   {
     "id": "controller-tests",
     "prompt": "给 PostsController#create 补测试。哪些该测，哪些不用测？",
-    "expect_any": ["rails-testing"],
+    "expect_any": [
+      "rails-testing"
+    ],
     "checks": [
-      {
-        "name": "集成测试走完整请求（IntegrationTest / post posts_url）",
-        "any": ["IntegrationTest", "集成测试", "post posts_url", "post posts_path", "post :create"]
-      },
-      {
-        "name": "覆盖失败路径与状态码 422",
-        "any": ["unprocessable", "422", "校验失败", "失败路径", "invalid"]
-      },
       {
         "name": "明确不测什么（视图/JS/一行 job/私有方法）",
         "any": [
@@ -289,48 +258,63 @@
           "不要重复",
           "不重复"
         ]
-      },
+      }
+    ],
+    "expect_tools": [
       {
-        "name": "计数断言 or fixtures（而不是 FactoryBot）",
-        "any": ["assert_difference", "assert_no_difference", "fixtures", "fixture"]
+        "name": "真去跑了 bin/rails test",
+        "cmd": [
+          "bin/rails test",
+          "bin/rake test"
+        ]
       }
     ]
   },
   {
     "id": "ruby-idiom",
     "prompt": "把这个 Ruby 方法改得更地道： def active_posts   r = []   Post.all.each { |p| r << p if p.published_at != nil }   r end",
-    "expect_any": ["ruby", "dhh"],
-    "checks": [
-      {
-        "name": "下推到数据库（where.not / 已有 scope）",
-        "any": ["where\\.not", "Post\\.published", "scope :published", "where\\("]
-      },
-      {
-        "name": "点出 Post.all + Ruby 层过滤的问题（载全表/不必要）",
-        "any": ["Post\\.all", "全表", "整表", "载入", "N\\+1", "数据库来过滤", "不是 Ruby"]
-      },
-      {
-        "name": "枚举习惯：select/filter_map/pluck 而不是手写累加",
-        "any": ["pluck", "filter_map", "select", "reject"]
-      }
-    ]
+    "expect_any": [
+      "ruby",
+      "dhh"
+    ],
+    "checks": []
   },
   {
     "id": "dhh-review",
     "prompt": "用 DHH 的风格评审一下 PostsController 的设计，指出该怎么改。",
-    "expect_any": ["dhh", "rails-best-practices-core"],
+    "expect_any": [
+      "dhh",
+      "rails-best-practices-core"
+    ],
     "checks": [
       {
         "name": "params.expect 取代 params.require(...).permit",
-        "any": ["params\\.expect", "\\.expect\\("]
-      },
-      {
-        "name": "逻辑该进模型（胖模型/thin controller，不在 controller 里拼）",
-        "any": ["模型", "model", "胖模型", "rich model", "feature envy", "thin controller", "控制器"]
+        "any": [
+          "params\\.expect",
+          "\\.expect\\("
+        ]
       },
       {
         "name": "DHH 的评审形态：最重的先说 + 具体改写/file:line + Ship it 或优先级清单",
-        "any": ["Ship it", "ship it", "file:line", "posts_controller\\.rb:\\d", "优先级", "先修", "最严重"]
+        "any": [
+          "Ship it",
+          "ship it",
+          "file:line",
+          "posts_controller\\.rb:\\d",
+          "优先级",
+          "先修",
+          "最严重"
+        ]
+      }
+    ],
+    "expect_tools": [
+      {
+        "name": "先看 diff/日志再评审（技能的规定动作）",
+        "cmd": [
+          "git diff",
+          "git log",
+          "git show"
+        ]
       }
     ]
   },
@@ -341,7 +325,11 @@
     "checks": [
       {
         "name": "回答提到解释器锁",
-        "any": ["GIL", "全局解释器锁", "Global Interpreter Lock"]
+        "any": [
+          "GIL",
+          "全局解释器锁",
+          "Global Interpreter Lock"
+        ]
       }
     ]
   },
@@ -352,7 +340,9 @@
     "checks": [
       {
         "name": "给出带类型注解的版本",
-        "any": ["number"]
+        "any": [
+          "number"
+        ]
       }
     ]
   },
@@ -363,7 +353,14 @@
     "checks": [
       {
         "name": "提到 GIN 的适用场景",
-        "any": ["jsonb", "数组", "全文", "array", "tsvector", "倒排"]
+        "any": [
+          "jsonb",
+          "数组",
+          "全文",
+          "array",
+          "tsvector",
+          "倒排"
+        ]
       }
     ]
   }
