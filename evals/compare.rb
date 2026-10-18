@@ -12,8 +12,29 @@ require "json"
 
 require_relative "run"
 
-files = ARGV.reject { |a| a.start_with?("--") }
-abort "用法：compare.rb <results.json> [<results.json> ...]" if files.empty?
+VALUE_OPTS = %w[--arm --bucket].freeze
+
+# 参数解析：带值的选项吃掉下一个 token，其余 --flag 跳过，剩下的才是文件。
+files = []
+i = 0
+while i < ARGV.size
+  if VALUE_OPTS.include?(ARGV[i]) then i += 2
+  elsif ARGV[i].start_with?("--") then i += 1
+  else files << ARGV[i]; i += 1
+  end
+end
+opts = Hash.new { |h, k| h[k] = [] }
+ARGV.each_with_index { |a, j| opts[a] = ARGV[j + 1].to_s.split(",") if VALUE_OPTS.include?(a) }
+
+abort "用法：compare.rb <results.json> [...] [--arm default] [--bucket auto,human] [--by-case]" if files.empty?
+ARMS = opts["--arm"]
+BUCKETS = opts["--bucket"]
+BY_CASE = ARGV.include?("--by-case")
+
+# 手写这段表已经写错过一次（忘了按臂过滤，数出 4 个轮次标记），所以做成选项。
+def keep?(r)
+  (ARMS.empty? || ARMS.include?(r["arm"])) && (BUCKETS.empty? || BUCKETS.include?(r["bucket"]))
+end
 
 def label_of(path, data)
   stamp = File.basename(path, ".json").sub(".rescore", "")
@@ -24,7 +45,7 @@ end
 rows = []
 files.each do |path|
   data = JSON.parse(File.read(path))
-  data["results"].group_by { |r| r["arm"] }.sort.each do |arm, rs|
+  data["results"].select { |r| keep?(r) }.group_by { |r| r["arm"] }.sort.each do |arm, rs|
     agg = aggregate(rs)
     pos = rs.select { |r| r["score"] && r["score"]["trigger_kind"] == "positive" }
     count = lambda do |bucket|
@@ -56,3 +77,21 @@ rows.each do |r|
 end
 
 puts "\n内容通过率只统计有断言的用例（预筛剪枝后剩下的判别型断言）；行为轴只看技能规定动作是否真做了。"
+
+if BY_CASE
+  puts "\n### 按用例并排（触发 n/N，内容 x/y）"
+  labels = files.map { |f| File.basename(f, ".json").sub(".rescore", "").sub(/^\d{8}-\d{6}-/, "") }
+  puts "| 用例 | #{labels.join(' | ')} |"
+  puts "|---|#{'---|' * files.size}"
+  all = files.flat_map { |f| JSON.parse(File.read(f))["results"].select { |r| keep?(r) }.map { |r| r["case"] } }.uniq.sort
+  all.each do |cid|
+    row = "| #{cid} "
+    files.each do |f|
+      rs = JSON.parse(File.read(f))["results"].select { |r| keep?(r) && r["case"] == cid && r["score"] }
+      chk = rs.flat_map { |r| r["score"]["checks"] }
+      trig = rs.empty? ? "-" : "#{rs.count { |r| r["score"]["trigger"] }}/#{rs.size}"
+      row += "| #{trig} #{chk.empty? ? '-' : "#{chk.count { |c| c['pass'] }}/#{chk.size}"} "
+    end
+    puts row + "|"
+  end
+end
