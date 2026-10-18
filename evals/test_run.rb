@@ -327,3 +327,87 @@ class RawNameTest < Minitest::Test
     assert_equal ["noskills", "helper-naming", 3], raw_parts("noskills--helper-naming--r3.jsonl.gz")
   end
 end
+
+class BatchHealthTest < Minitest::Test
+  def mk = BatchHealth.new
+
+  def test_aborts_after_repeated_same_error
+    h = mk
+    3.times { h.record(ok: false, signature: "gateway 401") }
+    assert h.aborted?
+    assert_match(/gateway 401/, h.snapshot[:abort])
+  end
+
+  def test_does_not_abort_on_varied_failures
+    h = mk
+    h.record(ok: false, signature: "a")
+    h.record(ok: false, signature: "b")
+    h.record(ok: false, signature: "c")
+    refute h.aborted?
+    assert_equal 3, h.snapshot[:fails]
+  end
+
+  def test_does_not_abort_once_past_the_window
+    h = mk
+    (ABORT_WINDOW + 1).times { h.record(ok: true) }
+    3.times { h.record(ok: false, signature: "late") }
+    refute h.aborted?, "窗口之外的同签名失败不该熔断"
+  end
+end
+
+class SelfCheckTest < Minitest::Test
+  def result(case_id, arm = "default", run: 1, score: { "trigger" => true, "checks" => [], "behaviors" => [] },
+             init_skills: TEST_KNOWN, error: nil, skill_denied: 0)
+    { "case" => case_id, "arm" => arm, "run" => run, "score" => score, "error" => error,
+      "init_skills" => init_skills, "skill_denied" => skill_denied }
+  end
+
+  def check(results, cases:, planned: nil, raw_files: nil, stamp: "x")
+    self_check(results, planned: planned || results.size, cases: cases, known: TEST_KNOWN,
+               stamp: stamp, raw_files: raw_files ||
+                 results.map { |r| raw_name(r["arm"], r["case"], r["run"]) })
+  end
+
+  def test_clean_batch_has_no_notes
+    assert_empty check([result("helper-naming")], cases: [CASE_MAP["helper-naming"]])
+  end
+
+  def test_missing_raw_stream_is_hard
+    notes = check([result("helper-naming")], cases: [CASE_MAP["helper-naming"]], raw_files: [])
+    assert_equal :hard, notes.first.first
+    assert_match(/没有原始 stream/, notes.first.last)
+  end
+
+  def test_duplicate_run_is_hard
+    rs = [result("helper-naming", run: 1), result("helper-naming", run: 1)]
+    notes = check(rs, cases: [CASE_MAP["helper-naming"]])
+    assert(notes.any? { |lvl, txt| lvl == :hard && txt.match?(/互相覆盖/) })
+  end
+
+  def test_missing_skill_in_init_is_hard
+    rs = [result("helper-naming", init_skills: ["dhh"])]
+    notes = check(rs, cases: [CASE_MAP["helper-naming"]])
+    assert(notes.any? { |lvl, txt| lvl == :hard && txt.match?(/init 里缺/) })
+  end
+
+  def test_skills_visible_in_noskills_arm_is_warned
+    rs = [result("helper-naming", "noskills")]
+    notes = check(rs, cases: [CASE_MAP["helper-naming"]])
+    assert(notes.any? { |lvl, txt| lvl == :warn && txt.match?(/noskills 臂却看到/) })
+  end
+
+  def test_high_infra_failure_ratio_is_hard
+    rs = [result("helper-naming"), result("dhh-review", score: nil, error: "401"),
+          result("ruby-idiom", score: nil, error: "401")]
+    cases = [CASE_MAP["helper-naming"], CASE_MAP["dhh-review"], CASE_MAP["ruby-idiom"]]
+    notes = check(rs, cases: cases)
+    assert(notes.any? { |lvl, txt| lvl == :hard && txt.match?(/基础设施失败/) })
+  end
+
+  def test_case_without_measurement_is_warned
+    kase = { "id" => "trigger-only", "expect_any" => ["dhh"], "checks" => [], "prompt" => "" }
+    rs = [result("trigger-only")]
+    notes = check(rs, cases: [kase])
+    assert(notes.any? { |lvl, txt| lvl == :warn && txt.match?(/只剩触发轴/) })
+  end
+end

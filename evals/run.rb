@@ -40,6 +40,8 @@ BASH_ALLOW = READONLY.map { |p| "Bash(#{p})" } + ["Bash(rtk:*)", "Bash(echo:*)",
 SKILL_FM_DROP = ["paths"].freeze
 
 RETRIES = 2
+ABORT_SAME_ERROR = 3   # 同一错误签名重复到这个次数
+ABORT_WINDOW = 12      # 且还发生在前 N 轮之内 —— 一次事故不该烧掉整批
 ARTIFACT_CAP = 20_000
 ANSWER_CAP = 60_000
 SKIP_ARTIFACT_DIRS = [".git", ".claude", "node_modules", "tmp", "log"].freeze
@@ -93,6 +95,47 @@ rescue SystemCallError
   "?"
 end
 
+# 批次健康：跑的过程中看一眼，别等跑完才发现整批都被同一件事废掉了
+# （20261018 那批 61 轮里 21 轮是网关 401，$20 白烧）。
+class BatchHealth
+  attr_reader :mutex, :signatures
+
+  def initialize
+    @mutex = Mutex.new
+    @done = 0
+    @fails = 0
+    @signatures = {}
+    @abort_reason = nil
+  end
+
+  def record(ok:, signature: nil)
+    mutex.synchronize do
+      @done += 1
+      if !ok && signature
+        @signatures[signature] = @signatures[signature].to_i + 1
+        hit = @signatures.find { |_, n| n >= ABORT_SAME_ERROR && @done <= ABORT_WINDOW }
+        @abort_reason ||= "同一错误重复 #{hit[1]} 次：#{hit[0]}" if hit
+      end
+      @fails += 1 unless ok
+    end
+  end
+
+  def aborted? = mutex.synchronize { !@abort_reason.nil? }
+  def snapshot = mutex.synchronize { { done: @done, fails: @fails, abort: @abort_reason } }
+end
+
+# 原始 stream 的文件名（归一到一个地方，重打分与自检都靠它）
+def raw_name(arm, case_id, run_no)
+  [arm, case_id, "r#{run_no}"].join("--") + ".jsonl.gz"
+end
+
+def raw_parts(basename)
+  stem = basename.sub(/\.jsonl\.gz\z/, "")
+  parts = stem.split("--")
+  run_no = parts.last.to_s.match?(/\Ar\d+\z/) ? parts.pop.delete_prefix("r").to_i : 1
+  [parts[0], parts[1], run_no]
+end
+
 # ---------------------------------------------------------------- 事件流解析
 
 # 从 stream-json 事件里提取：**加载成功**的技能、回答文本、成本、轮数、被拒的工具。
@@ -106,6 +149,9 @@ def parse_stream(lines)
   writes = []
   result_error = false
   api_error_status = nil
+  init_skills = nil
+  skill_denied = 0
+  pending_skill = {}
   commands = [] # 模型实际跑过的 Bash 命令（行为轴）
   reads = []    # 模型实际读过的文件（行为轴：评审类用例要求“先看了再评”）
   texts = []
@@ -137,7 +183,9 @@ def parse_stream(lines)
             elsif block["name"] == "Read"
               inp["file_path"].to_s[%r{/([^/]+)/SKILL\.md\z}, 1]
             end
-          pending[block["id"].to_s] = name if name
+          next unless name
+          pending[block["id"].to_s] = name
+          pending_skill[block["id"].to_s] = name
           body = case block["name"]
                  when "Write" then inp["content"]
                  when "Edit" then inp["new_string"]
@@ -153,14 +201,18 @@ def parse_stream(lines)
         next unless block.is_a?(Hash) && block["type"] == "tool_result"
         tid = block["tool_use_id"].to_s
         name = pending.delete(tid)
+        pending_skill.delete(tid)
         loaded << name if name && !block["is_error"]
         # 模型写出的文件正文也在事件流里：存下来，这样改断言后能照原样重打分
         file, body = pending_write.delete(tid)
         writes << "--- #{file} ---\n#{body}" if file && body && !block["is_error"]
       end
     when "system"
-      next unless ev["subtype"] == "permission_denied"
-      denied << (ev["tool_name"] || ev.dig("tool", "name") || "?")
+      if ev["subtype"] == "init"
+        init_skills = ev["skills"] || []
+      elsif ev["subtype"] == "permission_denied"
+        denied << (ev["tool_name"] || ev.dig("tool", "name") || "?")
+      end
     when "result"
       cost = ev["total_cost_usd"].to_f
       turns = ev["num_turns"].to_i
@@ -171,11 +223,15 @@ def parse_stream(lines)
     end
   end
 
+  # 调了但没成功拿到正文的技能：这些不算触发，但数量本身是信号（触发轴高估的来源）
+  skill_denied = pending_skill.size
+
   answer = texts.join("\n")
   answer += "\n#{result_text}" if result_text && !answer.include?(result_text)
   { "fired" => loaded.uniq.sort, "answer" => answer, "cost" => cost, "turns" => turns,
     "denied" => denied, "ended" => ended, "writes" => writes, "commands" => commands,
-    "reads" => reads, "result_error" => result_error, "api_error_status" => api_error_status }
+    "reads" => reads, "result_error" => result_error, "api_error_status" => api_error_status,
+    "init_skills" => init_skills, "skill_denied" => skill_denied }
 end
 
 # 没有 result 事件（超时/崩溃）或没有回答 = 基础设施失败，不是数据。
@@ -348,14 +404,13 @@ def run_one(kase, arm, args, known, meta, run_no = 1)
     raw_dir = File.join(RESULTS, "raw", args[:stamp])
     FileUtils.mkdir_p(raw_dir)
     # 文件名必须带轮次：`--runs 3` 时同名会互相覆盖，原始 stream 一丢就没法重打分
-    raw_name = [arm, kase["id"], "r#{run_no}"].join("--") + ".jsonl.gz"
-    Zlib::GzipWriter.open(File.join(raw_dir, raw_name)) { |gz| gz.write(out) }
+    Zlib::GzipWriter.open(File.join(raw_dir, raw_name(arm, kase["id"], run_no))) { |gz| gz.write(out) }
 
     errored = run_failed?(parsed)
     artifacts = collect_artifacts(workdir) + parsed["writes"]
     answer = (parsed["answer"] + "\n" + artifacts.join("\n"))[0, ANSWER_CAP]
 
-    { "case" => kase["id"], "arm" => arm, "bucket" => case_bucket(kase, meta),
+    { "case" => kase["id"], "arm" => arm, "run" => run_no, "bucket" => case_bucket(kase, meta),
       "seconds" => (Time.now - started).round(1),
       "cost" => parsed["cost"], "turns" => parsed["turns"],
       "denied" => parsed["denied"], "attempts" => attempt + 1, "ended" => parsed["ended"],
@@ -365,11 +420,62 @@ def run_one(kase, arm, args, known, meta, run_no = 1)
       "score" => errored ? nil : score_case(kase, answer, parsed, known),
       "commands" => parsed["commands"].first(40).map { |c| c[0, 200] },
       "reads" => parsed["reads"].first(40),
+      "init_skills" => parsed["init_skills"], "skill_denied" => parsed["skill_denied"],
       "answer_head" => parsed["answer"][0, 300] }
   ensure
     FileUtils.remove_entry(workdir, true)
     FileUtils.remove_entry(tmp, true)
   end
+end
+
+# 批次自检：数字发出去之前，先问一遍“这一批的测量本身成立吗”。
+# 这里的每条都对应本会话真实踩过的坑，所以它是检查，不是提醒。
+def self_check(results, planned:, cases:, known:, stamp:, raw_files: nil)
+  raw_files ||= Dir[File.join(RESULTS, "raw", stamp, "*.jsonl.gz")].map { |f| File.basename(f) }
+  expected = results.map { |r| raw_name(r["arm"], r["case"], r["run"]) }
+  notes = []
+
+  missing = expected - raw_files
+  notes << [:hard, "#{missing.size} 轮没有原始 stream：#{missing.first(3).inspect}"] unless missing.empty?
+  dupes = expected.tally.select { |_, n| n > 1 }.keys
+  notes << [:hard, "同一(臂,用例,轮次)重复，文件名互相覆盖：#{dupes.first(3).inspect}"] unless dupes.empty?
+  extra = raw_files - expected
+  notes << [:warn, "raw 目录里另有 #{extra.size} 个不属于本轮的文件"] unless extra.empty?
+
+  skipped = planned - results.size
+  notes << [:warn, "本轮少了 #{skipped} 轮（熔断或中止）"] if skipped.positive?
+
+  fails = results.count { |r| r["score"].nil? }
+  if fails.positive?
+    ratio = fails.to_f / results.size
+    notes << [(ratio > 0.2 ? :hard : :warn), "#{fails}/#{results.size} 轮基础设施失败（>20% 就不是模型的问题）"]
+  end
+
+  # 技能注入自检：default 臂每轮都该看到全部仓库技能；noskills 臂一个都不该有
+  results.each do |r|
+    got = r["init_skills"]
+    next if got.nil?
+    if r["arm"] == "default"
+      lack = known - got
+      notes << [:hard, "#{r['case']}--r#{r['run']} init 里缺 #{lack.inspect}（注入失败或被 frontmatter 丢弃）"] unless lack.empty?
+    elsif !got.empty?
+      notes << [:warn, "#{r['case']}--r#{r['run']}：noskills 臂却看到 #{got.size} 个技能"]
+    end
+  end
+
+  denied = results.sum { |r| r["skill_denied"].to_i }
+  notes << [:warn, "#{denied} 次技能调用没拿到结果（不计触发，但说明框架在拒）"] if denied.positive?
+
+  blank = cases.select { |c| c["forbid"] != "ALL" && Array(c["checks"]).empty? && Array(c["expect_tools"]).empty? }
+  notes << [:warn, "只剩触发轴的用例：#{blank.map { |c| c['id'] }.inspect}"] unless blank.empty?
+  notes
+end
+
+def self_check_text(notes)
+  return "\n## 批次自检\n- ✅ 全绿（原始 stream 齐、技能集对、无异常失败）" if notes.empty?
+  lines = ["\n## 批次自检"]
+  notes.each { |level, text| lines << "- #{level == :hard ? '⛔' : '⚠'} #{text}" }
+  lines.join("\n")
 end
 
 # ---------------------------------------------------------------- 汇总 / 报告
@@ -564,6 +670,10 @@ def rescore(source, model)
   puts text
 end
 
+def workers_hint(args, n)
+  [[args[:jobs], n].min, 1].max
+end
+
 def main(argv)
   args = parse_args(argv)
   return rescore(args[:rescore], args[:model]) unless args[:rescore].to_s.empty?
@@ -596,11 +706,14 @@ def main(argv)
   queue = Queue.new
   jobs.each_with_index { |job, i| queue << [i, job] }
   errors = []
+  health = BatchHealth.new
+  warn "#{jobs.size} 轮开跑（模型 #{model}，臂 #{arms.join('/')}，#{workers_hint(args, jobs.size)} 并发）"
   begin
     workers = [[args[:jobs], jobs.size].min, 1].max
     workers.times.map do
       Thread.new do
         loop do
+          break if health.aborted?
           i, (kase, arm, run_no) = queue.pop(true)
           failed = nil
           2.times do |attempt|
@@ -614,13 +727,22 @@ def main(argv)
               sleep 5
             end
           end
-          next unless failed
-          errors << failed
+          unless failed.nil?
+            errors << failed
+          end
+          ok = failed.nil? && !results[i]["score"].nil?
+          health.record(ok: ok, signature: results[i]["error"].to_s[0, 70])
+          snap = health.snapshot
+          warn format("[%d/%d] %s--%s--r%d %s %gs $%.2f%s", snap[:done], jobs.size, arm, kase["id"], run_no,
+                      results[i]["score"].nil? ? "失败" : (results[i]["score"]["trigger"] ? "✓" : "✗"),
+                      results[i]["seconds"], results[i]["cost"], snap[:fails].positive? ? " 失败#{snap[:fails]}" : "")
+          next if failed.nil?
           results[i] = { "case" => kase["id"], "arm" => arm, "bucket" => case_bucket(kase, meta),
                          "seconds" => 0, "cost" => 0.0, "turns" => 0, "denied" => [],
                          "attempts" => 0, "ended" => nil, "truncated" => true, "artifacts" => [],
                          "error" => "#{failed.class}: #{failed.message} @ #{failed.backtrace&.first}",
                          "score" => nil, "answer_head" => "" }
+          break if health.aborted?
         end
       rescue ThreadError
         nil
@@ -630,13 +752,18 @@ def main(argv)
     FileUtils.remove_entry(args[:cc_config], true)
   end
   errors.each { |e| warn "worker error: #{e.class}: #{e.message}" }
+  aborted = health.snapshot[:abort]
+  warn "已熔断：#{aborted}（剩下 #{results.count(&:nil?)} 轮没跑）" if aborted
+  results = results.compact
 
   head = IO.popen(["git", "rev-parse", "--short", "HEAD"], chdir: REPO, &:read).strip
   ver = claude_version
   text = +"# 技能评估 #{Time.now.strftime('%Y-%m-%d %H:%M')}（模型 #{model}，fork HEAD #{head}，claude #{ver}，runs=#{args[:runs]}）\n"
   text << "隔离：空 CLAUDE_CONFIG_DIR = 无个人技能/插件/hook；技能以 .claude/skills 注入夹具"
   text << "（剥 #{SKILL_FM_DROP.join('、')}）；触发只算加载成功的技能"
+  notes = self_check(results, planned: jobs.size, cases: cases, known: known, stamp: args[:stamp])
   text << report(results, arms)
+  text << self_check_text(notes)
 
   FileUtils.mkdir_p(RESULTS)
   File.write(File.join(RESULTS, "#{args[:stamp]}.json"),
@@ -644,7 +771,8 @@ def main(argv)
                                     "isolated" => true, "results" => results }))
   File.write(File.join(RESULTS, "#{args[:stamp]}.md"), text)
   puts text
-  exit(results.any? { |r| r["score"].nil? } ? 1 : 0)
+  hard = notes.any? { |level, _| level == :hard }
+  exit(hard ? 2 : (results.any? { |r| r["score"].nil? } ? 1 : 0))
 end
 
 main(ARGV) if $PROGRAM_NAME == __FILE__
