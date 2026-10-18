@@ -19,8 +19,18 @@ ruby evals/check_rates.rb results/<stamp>.json --arm noskills                # �
 ruby evals/compare.rb results/<A>.json results/<B>.json                      # 两个模型/两个臂并排
 ```
 
-结果落在 `results/<stamp>.md|.json`（不提交），原始 stream 在 `results/raw/`。
+```bash
+./bin/check                                   # 自检 + 夹具体检（改动 evals/ 或 skills/ 之后）
+ruby evals/run.rb --rescore <stamp>           # 改断言后重打分，不重跑
+```
+
+结果落在 `results/<stamp>.md|.json`（不提交），原始 stream 在 `results/raw/<stamp>/<臂>--<用例>--r<轮>.jsonl.gz`。
 报告头记 `fork HEAD`、`claude --version` 与隔离方式 —— 换技能或换 claude 版本前后各跑一次即为 A/B。
+报告末尾是**批次自检**：原始 stream 齐不齐、技能集对不对、基础设施失败比例；`⛔` 硬伤退出码 2。
+跑的过程中每完成一轮打一行进度（`[17/48] default--helper-naming--r2 ✓ 42s $0.31`），一批不会沉默 45 分钟。
+同一错误签名在前 12 轮里重复 3 次会**自动熔断**，剩下的轮次不跑（本会话被网关故障烧掉过 $20）。
+
+改动 harness 之前先读 [`INVARIANTS.md`](INVARIANTS.md)：那里列了每条测量不变量、违反时的症状、以及兜住它的检查。
 
 ## 设计
 

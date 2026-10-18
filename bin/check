@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# 这一个仓库的所有机械检查。改 evals/ 或 skills/ 之后跑它。
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+echo "== 用例集与评分逻辑自检 =="
+ruby evals/test_run.rb
+
+echo
+echo "== 夹具体检 =="
+if [ "${1:-}" = "--fast" ]; then
+  echo "  （--fast：跳过，需要本机装好夹具的 gems）"
+else
+  ruby evals/check_fixture.rb
+fi

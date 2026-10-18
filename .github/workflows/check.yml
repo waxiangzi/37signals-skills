@@ -1,0 +1,22 @@
+name: check
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          working-directory: evals/fixture
+      - name: 自检 + 夹具体检
+        working-directory: evals/fixture
+        run: bundle install --jobs 4
+      - name: check
+        run: ./bin/check

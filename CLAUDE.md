@@ -11,7 +11,14 @@ This repository packages 37signals' Rails patterns in two forms:
 
 This fork also carries skills that are not 37signals material (see the "Added in this fork" table in `README.md`): `rails-conventions` (original), and `ruby` plus six `hwc-*` skills vendored from superpowers-ruby. Their licenses live in `THIRD_PARTY_NOTICES.md`.
 
-There is no application code, build system, or tests.
+## Checks
+
+Nothing here ships as an application, but `evals/` is runnable code with its own tests:
+
+- `./bin/check` — self-tests, then the fixture's gates. Run it after touching `evals/` or `skills/`.
+- `evals/README.md` — how the harness measures, and the invariants it enforces. Read it before changing `run.rb`, `cases.json`, or the fixture.
+- `evals/check_fixture.rb` — the fixture must boot (`bin/rails test`, `zeitwerk:check`, `rubocop`); a broken fixture reads as a worse model.
+- Numbers must be traceable to `evals/results/raw/<stamp>/` — re-score with `ruby evals/run.rb --rescore <stamp>` instead of re-running.
 
 ## Structure
 
