@@ -417,6 +417,24 @@ def report(results, arms)
     trunc = rs.select { |r| r["truncated"] }.map { |r| r["case"] }
     lines << "- ⚠ 被 max-turns/预算截断（内容分不可信）：#{trunc.inspect}" unless trunc.empty?
 
+    # 多轮：先按用例看稳定性，再看单轮明细（单轮方差是这里最容易骗人的地方）
+    groups = rs.select { |r| r["score"] }.group_by { |r| r["case"] }
+    if groups.values.any? { |g| g.size > 1 }
+      lines << ""
+      lines << "### 按用例汇总（每例 #{groups.values.map(&:size).max} 轮）"
+      lines << ""
+      lines << "| 用例 | 触发 | 内容 | 行为 | 各轮触发 |"
+      lines << "|---|---|---|---|---|"
+      groups.each do |cid, g|
+        trig = g.select { |r| r["score"]["trigger"] }.size
+        chk = g.flat_map { |r| r["score"]["checks"] }
+        beh = g.flat_map { |r| r["score"]["behaviors"] }
+        marks = g.map { |r| r["score"]["trigger"] ? "✓" : "✗" }.join
+        lines << "| #{cid} | #{trig}/#{g.size} | #{chk.count { |c| c['pass'] }}/#{chk.size} | " \
+                 "#{beh.empty? ? '-' : "#{beh.count { |b| b['pass'] }}/#{beh.size}"} | #{arm == 'noskills' ? '-' : marks} |"
+      end
+    end
+
     lines << ""
     lines << "| 用例 | 触发 | 内容 | 行为 | 触发了 | 秒 | $ |"
     lines << "|---|---|---|---|---|---|---|"
