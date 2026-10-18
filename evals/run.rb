@@ -104,6 +104,8 @@ def parse_stream(lines)
   pending_write = {} # tool_use_id -> 写文件的内容（供重打分用）
   loaded = []
   writes = []
+  result_error = false
+  api_error_status = nil
   commands = [] # 模型实际跑过的 Bash 命令（行为轴）
   reads = []    # 模型实际读过的文件（行为轴：评审类用例要求“先看了再评”）
   texts = []
@@ -164,6 +166,8 @@ def parse_stream(lines)
       turns = ev["num_turns"].to_i
       result_text = ev["result"]
       ended = ev["subtype"]
+      result_error = ev["is_error"] ? true : false
+      api_error_status = ev["api_error_status"]
     end
   end
 
@@ -171,12 +175,18 @@ def parse_stream(lines)
   answer += "\n#{result_text}" if result_text && !answer.include?(result_text)
   { "fired" => loaded.uniq.sort, "answer" => answer, "cost" => cost, "turns" => turns,
     "denied" => denied, "ended" => ended, "writes" => writes, "commands" => commands,
-    "reads" => reads }
+    "reads" => reads, "result_error" => result_error, "api_error_status" => api_error_status }
 end
 
 # 没有 result 事件（超时/崩溃）或没有回答 = 基础设施失败，不是数据。
+#
+# 网关把凭据/额度一类的错误塞进正文返回时，subtype 照样是 success、cost 是 0，
+# 只有 is_error / api_error_status 说实话 —— 不认这两个字段，401 会被当成一次
+# "模型答得很差"计进分数（20261018-160032 那批 61 轮里有 21 轮就是这么被污染的）。
 def run_failed?(parsed)
-  parsed["ended"].nil? || parsed["answer"].to_s.strip.empty?
+  return true if parsed["ended"].nil? || parsed["answer"].to_s.strip.empty?
+  return true if parsed["result_error"] || parsed["api_error_status"]
+  parsed["answer"].match?(/\AFailed to authenticate|API Key has been disabled|\AAPI Error: \d{3}/i)
 end
 
 # ---------------------------------------------------------------- 评分

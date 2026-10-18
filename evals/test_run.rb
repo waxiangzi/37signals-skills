@@ -144,6 +144,20 @@ class RunFailedTest < Minitest::Test
   def test_max_turns_with_answer_is_data
     refute run_failed?({ "ended" => "error_max_turns", "answer" => "答案" })
   end
+
+  def test_provider_error_is_failure_not_data
+    # 负控：网关错误走 success 通道回来时，不能计成一次"答得很差"
+    gateway = { "ended" => "success", "result_error" => true, "api_error_status" => 401,
+                "answer" => "Failed to authenticate. API Error: 401 The API Key has been disabled." }
+    assert run_failed?(gateway)
+    assert run_failed?({ "ended" => "success", "answer" => "Failed to authenticate. API Error: 401" })
+    assert run_failed?({ "ended" => "success", "answer" => "API Error: 429 限额" })
+  end
+
+  def test_normal_answer_mentioning_auth_is_data
+    # 正控：答案里正常讨论鉴权不算失败
+    refute run_failed?({ "ended" => "success", "answer" => "签名用 secure_compare；未通过就 head :forbidden" })
+  end
 end
 
 class ParseTest < Minitest::Test
